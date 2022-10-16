@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 """
 The MIT License (MIT)
 
@@ -24,19 +22,25 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 """
 
+__all__ = (
+    'EqualityComparable',
+    'Hashable',
+)
+
+
 class EqualityComparable:
     __slots__ = ()
 
-    def __eq__(self, other):
-        return isinstance(other, self.__class__) and other.id == self.id
+    id: int
 
-    def __ne__(self, other):
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, self.__class__):
-            return other.id != self.id
-        return True
+            return other.id == self.id
+        return NotImplemented
+
 
 class Hashable(EqualityComparable):
     __slots__ = ()
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return self.id >> 22

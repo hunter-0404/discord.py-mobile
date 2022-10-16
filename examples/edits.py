@@ -1,10 +1,13 @@
+# This example requires the 'message_content' privileged intent to function.
+
 import discord
 import asyncio
 
+
 class MyClient(discord.Client):
     async def on_ready(self):
-        print('Connected!')
-        print('Username: {0.name}\nID: {0.id}'.format(self.user))
+        print(f'Logged in as {self.user} (ID: {self.user.id})')
+        print('------')
 
     async def on_message(self, message):
         if message.content.startswith('!editme'):
@@ -13,8 +16,12 @@ class MyClient(discord.Client):
             await msg.edit(content='40')
 
     async def on_message_edit(self, before, after):
-        fmt = '**{0.author}** edited their message:\n{0.content} -> {1.content}'
-        await before.channel.send(fmt.format(before, after))
+        msg = f'**{before.author}** edited their message:\n{before.content} -> {after.content}'
+        await before.channel.send(msg)
 
-client = MyClient()
+
+intents = discord.Intents.default()
+intents.message_content = True
+
+client = MyClient(intents=intents)
 client.run('token')

@@ -108,7 +108,7 @@ Doing something during cancellation:
 
     class MyCog(commands.Cog):
         def __init__(self, bot):
-            self.bot= bot
+            self.bot = bot
             self._batch = []
             self.lock = asyncio.Lock()
             self.bulker.start()
@@ -140,5 +140,16 @@ API Reference
 .. autoclass:: discord.ext.tasks.Loop()
     :members:
     :special-members: __call__
+    :exclude-members: after_loop, before_loop, error
+
+    .. automethod:: Loop.after_loop()
+        :decorator:
+
+    .. automethod:: Loop.before_loop()
+        :decorator:
+
+    .. automethod:: Loop.error()
+        :decorator:
 
 .. autofunction:: discord.ext.tasks.loop
+    :decorator:

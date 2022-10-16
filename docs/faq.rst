@@ -1,3 +1,5 @@
+:orphan:
+
 .. currentmodule:: discord
 .. _faq:
 
@@ -85,22 +87,29 @@ in the repository.
 How do I set the "Playing" status?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-There is a method for this under :class:`Client` called :meth:`Client.change_presence`.
-The relevant aspect of this is its ``activity`` keyword argument which takes in an :class:`Activity` object.
+The ``activity`` keyword argument may be passed in the :class:`Client` constructor or :meth:`Client.change_presence`, given an :class:`Activity` object.
+
+The constructor may be used for static activities, while :meth:`Client.change_presence` may be used to update the activity at runtime.
+
+.. warning::
+
+    It is highly discouraged to use :meth:`Client.change_presence` or API calls in :func:`on_ready` as this event may be called many times while running, not just once.
+
+    There is a high chance of disconnecting if presences are changed right after connecting.
 
 The status type (playing, listening, streaming, watching) can be set using the :class:`ActivityType` enum.
-For memory optimisation purposes, some activities are offered in slimmed down versions:
+For memory optimisation purposes, some activities are offered in slimmed-down versions:
 
 - :class:`Game`
 - :class:`Streaming`
 
 Putting both of these pieces of info together, you get the following: ::
 
-    await client.change_presence(activity=discord.Game(name='my game'))
+    client = discord.Client(activity=discord.Game(name='my game'))
 
     # or, for watching:
     activity = discord.Activity(name='my activity', type=discord.ActivityType.watching)
-    await client.change_presence(activity=activity)
+    client = discord.Client(activity=activity)
 
 How do I send a message to a specific channel?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -183,7 +192,9 @@ If you want to use unicode emoji, you must pass a valid unicode code point in a 
 - ``'\U0001F44D'``
 - ``'\N{THUMBS UP SIGN}'``
 
-Quick example: ::
+Quick example:
+
+.. code-block:: python3
 
     emoji = '\N{THUMBS UP SIGN}'
     # or '\U0001f44d' or '👍'
@@ -199,7 +210,9 @@ can use said emoji, you should be able to use :meth:`Client.get_emoji` to get an
 The name and ID of a custom emoji can be found with the client by prefixing ``:custom_emoji:`` with a backslash.
 For example, sending the message ``\:python3:`` with the client will result in ``<:python3:232720527448342530>``.
 
-Quick example: ::
+Quick example:
+
+.. code-block:: python3
 
 
     # if you have the ID already
@@ -227,8 +240,10 @@ technically in another thread, we must take caution in calling thread-safe opera
 us, :mod:`asyncio` comes with a :func:`asyncio.run_coroutine_threadsafe` function that allows us to call
 a coroutine from another thread.
 
-However, this function returns a :class:`concurrent.Future` and to actually call it we have to fetch its result. Putting all of
-this together we can do the following: ::
+However, this function returns a :class:`~concurrent.futures.Future` and to actually call it we have to fetch its result. Putting all of
+this together we can do the following:
+
+.. code-block:: python3
 
     def my_after(error):
         coro = some_channel.send('Song is done!')
@@ -274,7 +289,9 @@ The following use an HTTP request:
 If the functions above do not help you, then use of :func:`utils.find` or :func:`utils.get` would serve some use in finding
 specific models.
 
-Quick example: ::
+Quick example:
+
+.. code-block:: python3
 
     # find a guild by name
     guild = discord.utils.get(client.guilds, name='My Server')
@@ -288,9 +305,11 @@ How do I make a web request?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 To make a request, you should use a non-blocking library.
-This library already uses and requires a 3rd party library for making requests, ``aiohttp``.
+This library already uses and requires a 3rd party library for making requests, :doc:`aiohttp <aio:index>`.
 
-Quick example: ::
+Quick example:
+
+.. code-block:: python3
 
     async with aiohttp.ClientSession() as session:
         async with session.get('http://aws.random.cat/meow') as r:
@@ -298,6 +317,8 @@ Quick example: ::
                 js = await r.json()
 
 See `aiohttp's full documentation <http://aiohttp.readthedocs.io/en/stable/>`_ for more information.
+
+.. _local_image:
 
 How do I use a local image file for an embed image?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -310,19 +331,17 @@ and set the embed's image URL to ``attachment://image.png``,
 where ``image.png`` is the filename of the image you will send.
 
 
-Quick example: ::
+Quick example:
+
+.. code-block:: python3
 
     file = discord.File("path/to/my/image.png", filename="image.png")
     embed = discord.Embed()
     embed.set_image(url="attachment://image.png")
     await channel.send(file=file, embed=embed)
 
-.. note ::
-
-    Due to a Discord limitation, filenames may not include underscores.
-
 Is there an event for audit log entries being created?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Since Discord does not dispatch this information in the gateway, the library cannot provide this information.
 This is currently a Discord limitation.
@@ -356,14 +375,18 @@ to a message. Example::
 Why do my arguments require quotes?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-In a simple command defined as: ::
+In a simple command defined as:
+
+.. code-block:: python3
 
     @bot.command()
     async def echo(ctx, message: str):
         await ctx.send(message)
 
 Calling it via ``?echo a b c`` will only fetch the first argument and disregard the rest. To fix this you should either call
-it via ``?echo "a b c"`` or change the signature to have "consume rest" behaviour. Example: ::
+it via ``?echo "a b c"`` or change the signature to have "consume rest" behaviour. Example:
+
+.. code-block:: python3
 
     @bot.command()
     async def echo(ctx, *, message: str):
@@ -377,19 +400,23 @@ How do I get the original ``message``\?
 The :class:`~ext.commands.Context` contains an attribute, :attr:`~.Context.message` to get the original
 message.
 
-Example: ::
+Example:
+
+.. code-block:: python3
 
     @bot.command()
     async def length(ctx):
-        await ctx.send('Your message is {} characters long.'.format(len(ctx.message.content)))
+        await ctx.send(f'Your message is {len(ctx.message.content)} characters long.')
 
 How do I make a subcommand?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Use the ``group`` decorator. This will transform the callback into a ``Group`` which will allow you to add commands into
+Use the :func:`~ext.commands.group` decorator. This will transform the callback into a :class:`~ext.commands.Group` which will allow you to add commands into
 the group operating as "subcommands". These groups can be arbitrarily nested as well.
 
-Example: ::
+Example:
+
+.. code-block:: python3
 
     @bot.group()
     async def git(ctx):
@@ -398,6 +425,75 @@ Example: ::
 
     @git.command()
     async def push(ctx, remote: str, branch: str):
-        await ctx.send('Pushing to {} {}'.format(remote, branch))
+        await ctx.send(f'Pushing to {remote} {branch}')
 
 This could then be used as ``?git push origin master``.
+
+Views and Modals
+-----------------
+
+Questions regarding :class:`discord.ui.View`, :class:`discord.ui.Modal`, and their components such as buttons, select menus, etc.
+
+How can I disable all items on timeout?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This requires three steps.
+
+1. Attach a message to the :class:`~discord.ui.View` using either the return type of :meth:`~abc.Messageable.send` or retrieving it via :meth:`Interaction.original_response`.
+2. Inside :meth:`~ui.View.on_timeout`, loop over all items inside the view and mark them disabled.
+3. Edit the message we retrieved in step 1 with the newly modified view.
+
+Putting it all together, we can do this in a text command:
+
+.. code-block:: python3
+
+    class MyView(discord.ui.View):
+        async def on_timeout(self) -> None:
+            # Step 2
+            for item in self.children:
+                item.disabled = True
+
+            # Step 3
+            await self.message.edit(view=self)
+
+        @discord.ui.button(label='Example')
+        async def example_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await interaction.response.send_message('Hello!', ephemeral=True)
+
+    @bot.command()
+    async def timeout_example(ctx):
+        """An example to showcase disabling buttons on timing out"""
+        view = MyView()
+        # Step 1
+        view.message = await ctx.send('Press me!', view=view)
+
+Application commands do not return a message when you respond with :meth:`InteractionResponse.send_message`, therefore in order to reliably do this we should retrieve the message using :meth:`Interaction.original_response`.
+
+Putting it all together, using the previous view definition:
+
+.. code-block:: python3
+
+    @tree.command()
+    async def more_timeout_example(interaction):
+        """Another example to showcase disabling buttons on timing out"""
+        view = MyView()
+        await interaction.response.send_message('Press me!', view=view)
+
+        # Step 1
+        view.message = await interaction.original_response()
+
+
+Application Commands
+--------------------
+
+Questions regarding Discord's new application commands, commonly known as "slash commands" or "context menu commands".
+
+My bot's commands are not showing up!
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+1. Did you :meth:`~.CommandTree.sync` your command? Commands need to be synced before they will appear.
+2. Did you invite your bot with the correct permissions? Bots need to be invited with the ``applications.commands``
+   scope in addition to the ``bot`` scope. For example, invite the bot with the following URL:
+   ``https://discord.com/oauth2/authorize?client_id=<client id>&scope=applications.commands+bot``.
+   Alternatively, if you use :func:`utils.oauth_url`, you can call the function as such:
+   ``oauth_url(<other options>, scopes=("bot", "applications.commands"))``.

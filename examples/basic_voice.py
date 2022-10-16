@@ -1,3 +1,5 @@
+# This example requires the 'message_content' privileged intent to function.
+
 import asyncio
 
 import discord
@@ -20,11 +22,11 @@ ytdl_format_options = {
     'quiet': True,
     'no_warnings': True,
     'default_search': 'auto',
-    'source_address': '0.0.0.0' # bind to ipv4 since ipv6 addresses cause issues sometimes
+    'source_address': '0.0.0.0',  # bind to ipv4 since ipv6 addresses cause issues sometimes
 }
 
 ffmpeg_options = {
-    'options': '-vn'
+    'options': '-vn',
 }
 
 ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
@@ -70,9 +72,9 @@ class Music(commands.Cog):
         """Plays a file from the local filesystem"""
 
         source = discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(query))
-        ctx.voice_client.play(source, after=lambda e: print('Player error: %s' % e) if e else None)
+        ctx.voice_client.play(source, after=lambda e: print(f'Player error: {e}') if e else None)
 
-        await ctx.send('Now playing: {}'.format(query))
+        await ctx.send(f'Now playing: {query}')
 
     @commands.command()
     async def yt(self, ctx, *, url):
@@ -80,9 +82,9 @@ class Music(commands.Cog):
 
         async with ctx.typing():
             player = await YTDLSource.from_url(url, loop=self.bot.loop)
-            ctx.voice_client.play(player, after=lambda e: print('Player error: %s' % e) if e else None)
+            ctx.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
 
-        await ctx.send('Now playing: {}'.format(player.title))
+        await ctx.send(f'Now playing: {player.title}')
 
     @commands.command()
     async def stream(self, ctx, *, url):
@@ -90,9 +92,9 @@ class Music(commands.Cog):
 
         async with ctx.typing():
             player = await YTDLSource.from_url(url, loop=self.bot.loop, stream=True)
-            ctx.voice_client.play(player, after=lambda e: print('Player error: %s' % e) if e else None)
+            ctx.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
 
-        await ctx.send('Now playing: {}'.format(player.title))
+        await ctx.send(f'Now playing: {player.title}')
 
     @commands.command()
     async def volume(self, ctx, volume: int):
@@ -102,7 +104,7 @@ class Music(commands.Cog):
             return await ctx.send("Not connected to a voice channel.")
 
         ctx.voice_client.source.volume = volume / 100
-        await ctx.send("Changed volume to {}%".format(volume))
+        await ctx.send(f"Changed volume to {volume}%")
 
     @commands.command()
     async def stop(self, ctx):
@@ -123,13 +125,27 @@ class Music(commands.Cog):
         elif ctx.voice_client.is_playing():
             ctx.voice_client.stop()
 
-bot = commands.Bot(command_prefix=commands.when_mentioned_or("!"),
-                   description='Relatively simple music bot example')
+
+intents = discord.Intents.default()
+intents.message_content = True
+
+bot = commands.Bot(
+    command_prefix=commands.when_mentioned_or("!"),
+    description='Relatively simple music bot example',
+    intents=intents,
+)
+
 
 @bot.event
 async def on_ready():
-    print('Logged in as {0} ({0.id})'.format(bot.user))
+    print(f'Logged in as {bot.user} (ID: {bot.user.id})')
     print('------')
 
-bot.add_cog(Music(bot))
-bot.run('token')
+
+async def main():
+    async with bot:
+        await bot.add_cog(Music(bot))
+        await bot.start('token')
+
+
+asyncio.run(main())
