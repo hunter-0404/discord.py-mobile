@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import array
 import asyncio
+from textwrap import TextWrapper
 from typing import (
     Any,
     AsyncIterable,
@@ -55,7 +56,7 @@ from typing import (
     TYPE_CHECKING,
 )
 import unicodedata
-from base64 import b64encode
+from base64 import b64encode, b64decode
 from bisect import bisect_left
 import datetime
 import functools
@@ -91,6 +92,7 @@ __all__ = (
     'remove_markdown',
     'escape_markdown',
     'escape_mentions',
+    'maybe_coroutine',
     'as_chunks',
     'format_dt',
     'MISSING',
@@ -98,6 +100,7 @@ __all__ = (
 )
 
 DISCORD_EPOCH = 1420070400000
+DEFAULT_FILE_SIZE_LIMIT_BYTES = 26214400
 
 
 class _MissingSentinel:
@@ -626,6 +629,10 @@ def _bytes_to_base64_data(data: bytes) -> str:
     return fmt.format(mime=mime, data=b64)
 
 
+def _base64_to_bytes(data: str) -> bytes:
+    return b64decode(data.encode('ascii'))
+
+
 def _is_submodule(parent: str, child: str) -> bool:
     return parent == child or child.startswith(parent + '.')
 
@@ -657,6 +664,30 @@ def _parse_ratelimit_header(request: Any, *, use_clock: bool = False) -> float:
 
 
 async def maybe_coroutine(f: MaybeAwaitableFunc[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    r"""|coro|
+
+    A helper function that will await the result of a function if it's a coroutine
+    or return the result if it's not.
+
+    This is useful for functions that may or may not be coroutines.
+
+    .. versionadded:: 2.2
+
+    Parameters
+    -----------
+    f: Callable[..., Any]
+        The function or coroutine to call.
+    \*args
+        The arguments to pass to the function.
+    \*\*kwargs
+        The keyword arguments to pass to the function.
+
+    Returns
+    --------
+    Any
+        The result of the function or coroutine.
+    """
+
     value = f(*args, **kwargs)
     if _isawaitable(value):
         return await value
@@ -868,7 +899,7 @@ def resolve_template(code: Union[Template, str]) -> str:
 
 _MARKDOWN_ESCAPE_SUBREGEX = '|'.join(r'\{0}(?=([\s\S]*((?<!\{0})\{0})))'.format(c) for c in ('*', '`', '_', '~', '|'))
 
-_MARKDOWN_ESCAPE_COMMON = r'^>(?:>>)?\s|\[.+\]\(.+\)'
+_MARKDOWN_ESCAPE_COMMON = r'^>(?:>>)?\s|\[.+\]\(.+\)|^#{1,3}|^\s*-'
 
 _MARKDOWN_ESCAPE_REGEX = re.compile(fr'(?P<markdown>{_MARKDOWN_ESCAPE_SUBREGEX}|{_MARKDOWN_ESCAPE_COMMON})', re.MULTILINE)
 
@@ -901,7 +932,7 @@ def remove_markdown(text: str, *, ignore_links: bool = True) -> str:
         The text with the markdown special characters removed.
     """
 
-    def replacement(match):
+    def replacement(match: re.Match[str]) -> str:
         groupdict = match.groupdict()
         return groupdict.get('url', '')
 
@@ -1207,15 +1238,25 @@ def format_dt(dt: datetime.datetime, /, style: Optional[TimestampStyle] = None) 
     return f'<t:{int(dt.timestamp())}:{style}>'
 
 
+def is_docker() -> bool:
+    path = '/proc/self/cgroup'
+    return os.path.exists('/.dockerenv') or (os.path.isfile(path) and any('docker' in line for line in open(path)))
+
+
 def stream_supports_colour(stream: Any) -> bool:
     is_a_tty = hasattr(stream, 'isatty') and stream.isatty()
-    if sys.platform != 'win32':
+
+    # Pycharm and Vscode support colour in their inbuilt editors
+    if 'PYCHARM_HOSTED' in os.environ or os.environ.get('TERM_PROGRAM') == 'vscode':
         return is_a_tty
+
+    if sys.platform != 'win32':
+        # Docker does not consistently have a tty attached to it
+        return is_a_tty or is_docker()
 
     # ANSICON checks for things like ConEmu
     # WT_SESSION checks if this is Windows Terminal
-    # VSCode built-in terminal supports colour too
-    return is_a_tty and ('ANSICON' in os.environ or 'WT_SESSION' in os.environ or os.environ.get('TERM_PROGRAM') == 'vscode')
+    return is_a_tty and ('ANSICON' in os.environ or 'WT_SESSION' in os.environ)
 
 
 class _ColourFormatter(logging.Formatter):
@@ -1319,3 +1360,23 @@ def setup_logging(
     handler.setFormatter(formatter)
     logger.setLevel(level)
     logger.addHandler(handler)
+
+
+def _shorten(
+    input: str,
+    *,
+    _wrapper: TextWrapper = TextWrapper(width=100, max_lines=1, replace_whitespace=True, placeholder='…'),
+) -> str:
+    try:
+        # split on the first double newline since arguments may appear after that
+        input, _ = re.split(r'\n\s*\n', input, maxsplit=1)
+    except ValueError:
+        pass
+    return _wrapper.fill(' '.join(input.strip().split()))
+
+
+CAMEL_CASE_REGEX = re.compile(r'(?<!^)(?=[A-Z])')
+
+
+def _to_kebab_case(text: str) -> str:
+    return CAMEL_CASE_REGEX.sub('-', text).lower()

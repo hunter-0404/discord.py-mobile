@@ -32,6 +32,7 @@ from typing import (
     Dict,
     Optional,
     TYPE_CHECKING,
+    Type,
     Union,
     Callable,
     Any,
@@ -39,6 +40,7 @@ from typing import (
     TypeVar,
     Coroutine,
     Sequence,
+    Generic,
     Tuple,
     Deque,
     Literal,
@@ -64,7 +66,6 @@ from .role import Role
 from .enums import ChannelType, try_enum, Status
 from . import utils
 from .flags import ApplicationFlags, Intents, MemberCacheFlags
-from .object import Object
 from .invite import Invite
 from .integrations import _integration_factory
 from .interactions import Interaction
@@ -74,15 +75,18 @@ from .stage_instance import StageInstance
 from .threads import Thread, ThreadMember
 from .sticker import GuildSticker
 from .automod import AutoModRule, AutoModAction
+from .audit_logs import AuditLogEntry
+from ._types import ClientT
 
 if TYPE_CHECKING:
     from .abc import PrivateChannel
     from .message import MessageableChannel
-    from .guild import GuildChannel, VocalGuildChannel
+    from .guild import GuildChannel
     from .http import HTTPClient
     from .voice_client import VoiceProtocol
-    from .client import Client
     from .gateway import DiscordWebSocket
+    from .ui.item import Item
+    from .ui.dynamic import DynamicItem
     from .app_commands import CommandTree, Translator
 
     from .types.automod import AutoModerationRule, AutoModerationActionExecution
@@ -98,7 +102,7 @@ if TYPE_CHECKING:
     from .types.command import GuildApplicationCommandPermissions as GuildApplicationCommandPermissionsPayload
 
     T = TypeVar('T')
-    Channel = Union[GuildChannel, VocalGuildChannel, PrivateChannel, PartialMessageable]
+    Channel = Union[GuildChannel, PrivateChannel, PartialMessageable]
 
 
 class ChunkRequest:
@@ -159,10 +163,10 @@ async def logging_coroutine(coroutine: Coroutine[Any, Any, T], *, info: str) -> 
         _log.exception('Exception occurred during %s', info)
 
 
-class ConnectionState:
+class ConnectionState(Generic[ClientT]):
     if TYPE_CHECKING:
         _get_websocket: Callable[..., DiscordWebSocket]
-        _get_client: Callable[..., Client]
+        _get_client: Callable[..., ClientT]
         _parsers: Dict[str, Callable[[Dict[str, Any]], None]]
 
     def __init__(
@@ -258,6 +262,13 @@ class ConnectionState:
 
         self.clear()
 
+    # For some reason Discord still sends emoji/sticker data in payloads
+    # This makes it hard to actually swap out the appropriate store methods
+    # So this is checked instead, it's a small penalty to pay
+    @property
+    def cache_guild_expressions(self) -> bool:
+        return self._intents.emojis_and_stickers
+
     async def close(self) -> None:
         for voice in self.voice_clients:
             try:
@@ -348,18 +359,18 @@ class ConnectionState:
         for vc in self.voice_clients:
             vc.main_ws = ws  # type: ignore # Silencing the unknown attribute (ok at runtime).
 
-    def store_user(self, data: Union[UserPayload, PartialUserPayload]) -> User:
+    def store_user(self, data: Union[UserPayload, PartialUserPayload], *, cache: bool = True) -> User:
         # this way is 300% faster than `dict.setdefault`.
         user_id = int(data['id'])
         try:
             return self._users[user_id]
         except KeyError:
             user = User(state=self, data=data)
-            if user.discriminator != '0000':
+            if cache:
                 self._users[user_id] = user
             return user
 
-    def store_user_no_intents(self, data: Union[UserPayload, PartialUserPayload]) -> User:
+    def store_user_no_intents(self, data: Union[UserPayload, PartialUserPayload], *, cache: bool = True) -> User:
         return User(state=self, data=data)
 
     def create_user(self, data: Union[UserPayload, PartialUserPayload]) -> User:
@@ -386,6 +397,12 @@ class ConnectionState:
 
     def prevent_view_updates_for(self, message_id: int) -> Optional[View]:
         return self._view_store.remove_message_tracking(message_id)
+
+    def store_dynamic_items(self, *items: Type[DynamicItem[Item[Any]]]) -> None:
+        self._view_store.add_dynamic_items(*items)
+
+    def remove_dynamic_items(self, *items: Type[DynamicItem[Item[Any]]]) -> None:
+        self._view_store.remove_dynamic_items(*items)
 
     @property
     def persistent_views(self) -> Sequence[View]:
@@ -613,7 +630,7 @@ class ConnectionState:
         if self._messages is not None:
             self._messages.append(message)
         # we ensure that the channel is either a TextChannel, VoiceChannel, or Thread
-        if channel and channel.__class__ in (TextChannel, VoiceChannel, Thread):
+        if channel and channel.__class__ in (TextChannel, VoiceChannel, Thread, StageChannel):
             channel.last_message_id = message.id  # type: ignore
 
     def parse_message_delete(self, data: gw.MessageDeleteEvent) -> None:
@@ -798,7 +815,7 @@ class ConnectionState:
                     for s in guild.scheduled_events:
                         if s.channel_id == channel.id:
                             guild._scheduled_events.pop(s.id)
-                            self.dispatch('scheduled_event_delete', guild, s)
+                            self.dispatch('scheduled_event_delete', s)
 
     def parse_channel_update(self, data: gw.ChannelUpdateEvent) -> None:
         channel_type = try_enum(ChannelType, data.get('type'))
@@ -1095,6 +1112,24 @@ class ConnectionState:
 
         guild.stickers = tuple(map(lambda d: self.store_sticker(guild, d), data['stickers']))
         self.dispatch('guild_stickers_update', guild, before_stickers, guild.stickers)
+
+    def parse_guild_audit_log_entry_create(self, data: gw.GuildAuditLogEntryCreate) -> None:
+        guild = self._get_guild(int(data['guild_id']))
+        if guild is None:
+            _log.debug('GUILD_AUDIT_LOG_ENTRY_CREATE referencing an unknown guild ID: %s. Discarding.', data['guild_id'])
+            return
+
+        entry = AuditLogEntry(
+            users=self._users,
+            integrations={},
+            app_commands={},
+            automod_rules={},
+            webhooks={},
+            data=data,
+            guild=guild,
+        )
+
+        self.dispatch('audit_log_entry_create', entry)
 
     def parse_auto_moderation_rule_create(self, data: AutoModerationRule) -> None:
         guild = self._get_guild(int(data['guild_id']))
@@ -1594,7 +1629,7 @@ class ConnectionState:
         return Message(state=self, channel=channel, data=data)
 
 
-class AutoShardedConnectionState(ConnectionState):
+class AutoShardedConnectionState(ConnectionState[ClientT]):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
 
@@ -1612,9 +1647,10 @@ class AutoShardedConnectionState(ConnectionState):
             new_guild = self._get_guild(msg.guild.id)
             if new_guild is not None and new_guild is not msg.guild:
                 channel_id = msg.channel.id
-                channel = new_guild._resolve_channel(channel_id) or Object(id=channel_id)
-                # channel will either be a TextChannel, Thread or Object
-                msg._rebind_cached_references(new_guild, channel)  # type: ignore
+                channel = new_guild._resolve_channel(channel_id) or PartialMessageable(
+                    state=self, id=channel_id, guild_id=new_guild.id
+                )
+                msg._rebind_cached_references(new_guild, channel)
 
     async def chunker(
         self,

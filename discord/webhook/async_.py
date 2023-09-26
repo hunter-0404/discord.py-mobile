@@ -38,14 +38,14 @@ import aiohttp
 from .. import utils
 from ..errors import HTTPException, Forbidden, NotFound, DiscordServerError
 from ..message import Message
-from ..enums import try_enum, WebhookType
+from ..enums import try_enum, WebhookType, ChannelType
 from ..user import BaseUser, User
 from ..flags import MessageFlags
 from ..asset import Asset
 from ..partial_emoji import PartialEmoji
 from ..http import Route, handle_message_parameters, MultipartParameters, HTTPClient, json_or_text
 from ..mixins import Hashable
-from ..channel import TextChannel, PartialMessageable
+from ..channel import TextChannel, ForumChannel, PartialMessageable
 from ..file import File
 
 __all__ = (
@@ -62,13 +62,14 @@ if TYPE_CHECKING:
     from types import TracebackType
 
     from ..embeds import Embed
+    from ..client import Client
     from ..mentions import AllowedMentions
     from ..message import Attachment
     from ..state import ConnectionState
     from ..http import Response
     from ..guild import Guild
     from ..emoji import Emoji
-    from ..channel import ForumChannel, VoiceChannel
+    from ..channel import VoiceChannel
     from ..abc import Snowflake
     from ..ui.view import View
     import datetime
@@ -714,15 +715,19 @@ class _WebhookState:
             return self._parent._get_guild(guild_id)
         return None
 
-    def store_user(self, data: Union[UserPayload, PartialUserPayload]) -> BaseUser:
+    def store_user(self, data: Union[UserPayload, PartialUserPayload], *, cache: bool = True) -> BaseUser:
         if self._parent is not None:
-            return self._parent.store_user(data)
+            return self._parent.store_user(data, cache=cache)
         # state parameter is artificial
         return BaseUser(state=self, data=data)  # type: ignore
 
     def create_user(self, data: Union[UserPayload, PartialUserPayload]) -> BaseUser:
         # state parameter is artificial
         return BaseUser(state=self, data=data)  # type: ignore
+
+    @property
+    def allowed_mentions(self) -> Optional[AllowedMentions]:
+        return None
 
     def get_reaction_emoji(self, data: PartialEmojiPayload) -> Union[PartialEmoji, Emoji, str]:
         if self._parent is not None:
@@ -1157,7 +1162,15 @@ class Webhook(BaseWebhook):
         return f'https://discord.com/api/webhooks/{self.id}/{self.token}'
 
     @classmethod
-    def partial(cls, id: int, token: str, *, session: aiohttp.ClientSession, bot_token: Optional[str] = None) -> Self:
+    def partial(
+        cls,
+        id: int,
+        token: str,
+        *,
+        session: aiohttp.ClientSession = MISSING,
+        client: Client = MISSING,
+        bot_token: Optional[str] = None,
+    ) -> Self:
         """Creates a partial :class:`Webhook`.
 
         Parameters
@@ -1172,11 +1185,22 @@ class Webhook(BaseWebhook):
             will not close it.
 
             .. versionadded:: 2.0
+        client: :class:`Client`
+            The client to initialise this webhook with. This allows it to
+            attach the client's internal state. If ``session`` is not given
+            while this is given then the client's internal session will be used.
+
+            .. versionadded:: 2.2
         bot_token: Optional[:class:`str`]
             The bot authentication token for authenticated requests
             involving the webhook.
 
             .. versionadded:: 2.0
+
+        Raises
+        -------
+        TypeError
+            Neither ``session`` nor ``client`` were given.
 
         Returns
         --------
@@ -1190,10 +1214,26 @@ class Webhook(BaseWebhook):
             'token': token,
         }
 
-        return cls(data, session, token=bot_token)
+        state = None
+        if client is not MISSING:
+            state = client._connection
+            if session is MISSING:
+                session = client.http._HTTPClient__session  # type: ignore
+
+        if session is MISSING:
+            raise TypeError('session or client must be given')
+
+        return cls(data, session, token=bot_token, state=state)
 
     @classmethod
-    def from_url(cls, url: str, *, session: aiohttp.ClientSession, bot_token: Optional[str] = None) -> Self:
+    def from_url(
+        cls,
+        url: str,
+        *,
+        session: aiohttp.ClientSession = MISSING,
+        client: Client = MISSING,
+        bot_token: Optional[str] = None,
+    ) -> Self:
         """Creates a partial :class:`Webhook` from a webhook URL.
 
         .. versionchanged:: 2.0
@@ -1210,6 +1250,12 @@ class Webhook(BaseWebhook):
             will not close it.
 
             .. versionadded:: 2.0
+        client: :class:`Client`
+            The client to initialise this webhook with. This allows it to
+            attach the client's internal state. If ``session`` is not given
+            while this is given then the client's internal session will be used.
+
+            .. versionadded:: 2.2
         bot_token: Optional[:class:`str`]
             The bot authentication token for authenticated requests
             involving the webhook.
@@ -1220,6 +1266,8 @@ class Webhook(BaseWebhook):
         -------
         ValueError
             The URL is invalid.
+        TypeError
+            Neither ``session`` nor ``client`` were given.
 
         Returns
         --------
@@ -1227,13 +1275,22 @@ class Webhook(BaseWebhook):
             A partial :class:`Webhook`.
             A partial webhook is just a webhook object with an ID and a token.
         """
-        m = re.search(r'discord(?:app)?\.com/api/webhooks/(?P<id>[0-9]{17,20})/(?P<token>[A-Za-z0-9\.\-\_]{60,68})', url)
+        m = re.search(r'discord(?:app)?\.com/api/webhooks/(?P<id>[0-9]{17,20})/(?P<token>[A-Za-z0-9\.\-\_]{60,})', url)
         if m is None:
             raise ValueError('Invalid webhook URL given.')
 
+        state = None
+        if client is not MISSING:
+            state = client._connection
+            if session is MISSING:
+                session = client.http._HTTPClient__session  # type: ignore
+
+        if session is MISSING:
+            raise TypeError('session or client must be given')
+
         data: Dict[str, Any] = m.groupdict()
         data['type'] = 1
-        return cls(data, session, token=bot_token)  # type: ignore
+        return cls(data, session, token=bot_token, state=state)  # type: ignore  # Casting dict[str, Any] to WebhookPayload
 
     @classmethod
     def _as_follower(cls, data, *, channel, user) -> Self:
@@ -1244,7 +1301,13 @@ class Webhook(BaseWebhook):
             'name': name,
             'channel_id': channel.id,
             'guild_id': channel.guild.id,
-            'user': {'username': user.name, 'discriminator': user.discriminator, 'id': user.id, 'avatar': user._avatar},
+            'user': {
+                'username': user.name,
+                'discriminator': user.discriminator,
+                'global_name': user.global_name,
+                'id': user.id,
+                'avatar': user._avatar,
+            },
         }
 
         state = channel._state
@@ -1454,8 +1517,7 @@ class Webhook(BaseWebhook):
                 proxy_auth=self.proxy_auth,
                 reason=reason,
             )
-
-        if prefer_auth and self.auth_token:
+        elif prefer_auth and self.auth_token:
             data = await adapter.edit_webhook(
                 self.id,
                 self.auth_token,
@@ -1492,10 +1554,18 @@ class Webhook(BaseWebhook):
         state = _WebhookState(self, parent=self._state, thread=thread)
         # state may be artificial (unlikely at this point...)
         if thread is MISSING:
-            channel = self.channel or PartialMessageable(state=self._state, guild_id=self.guild_id, id=int(data['channel_id']))  # type: ignore
+            channel_id = int(data['channel_id'])
+            channel = self.channel
+            # If this thread is created via thread_name then the channel_id would not be the same as the webhook's channel_id
+            # which would be the forum channel.
+            if self.channel_id != channel_id:
+                type = ChannelType.public_thread if isinstance(channel, ForumChannel) else (channel and channel.type)
+                channel = PartialMessageable(state=self._state, guild_id=self.guild_id, id=channel_id, type=type)  # type: ignore
+            else:
+                channel = self.channel or PartialMessageable(state=self._state, guild_id=self.guild_id, id=channel_id)  # type: ignore
         else:
             channel = self.channel
-            if isinstance(channel, TextChannel):
+            if isinstance(channel, (ForumChannel, TextChannel)):
                 channel = channel.get_thread(thread.id)
 
             if channel is None:
@@ -1523,6 +1593,7 @@ class Webhook(BaseWebhook):
         thread_name: str = MISSING,
         wait: Literal[True],
         suppress_embeds: bool = MISSING,
+        silent: bool = MISSING,
     ) -> WebhookMessage:
         ...
 
@@ -1545,6 +1616,7 @@ class Webhook(BaseWebhook):
         thread_name: str = MISSING,
         wait: Literal[False] = ...,
         suppress_embeds: bool = MISSING,
+        silent: bool = MISSING,
     ) -> None:
         ...
 
@@ -1566,6 +1638,7 @@ class Webhook(BaseWebhook):
         thread_name: str = MISSING,
         wait: bool = False,
         suppress_embeds: bool = False,
+        silent: bool = False,
     ) -> Optional[WebhookMessage]:
         """|coro|
 
@@ -1646,6 +1719,11 @@ class Webhook(BaseWebhook):
             Whether to suppress embeds for the message. This sends the message without any embeds if set to ``True``.
 
             .. versionadded:: 2.0
+        silent: :class:`bool`
+            Whether to suppress push and desktop notifications for the message. This will increment the mention counter
+            in the UI, but will not actually send a notification.
+
+            .. versionadded:: 2.2
 
         Raises
         --------
@@ -1676,10 +1754,11 @@ class Webhook(BaseWebhook):
         previous_mentions: Optional[AllowedMentions] = getattr(self._state, 'allowed_mentions', None)
         if content is None:
             content = MISSING
-        if ephemeral or suppress_embeds:
+        if ephemeral or suppress_embeds or silent:
             flags = MessageFlags._from_value(0)
             flags.ephemeral = ephemeral
             flags.suppress_embeds = suppress_embeds
+            flags.suppress_notifications = silent
         else:
             flags = MISSING
 
@@ -1703,7 +1782,7 @@ class Webhook(BaseWebhook):
         if thread_name is not MISSING and thread is not MISSING:
             raise TypeError('Cannot mix thread_name and thread keyword arguments.')
 
-        params = handle_message_parameters(
+        with handle_message_parameters(
             content=content,
             username=username,
             avatar_url=avatar_url,
@@ -1717,24 +1796,24 @@ class Webhook(BaseWebhook):
             thread_name=thread_name,
             allowed_mentions=allowed_mentions,
             previous_allowed_mentions=previous_mentions,
-        )
-        adapter = async_context.get()
-        thread_id: Optional[int] = None
-        if thread is not MISSING:
-            thread_id = thread.id
+        ) as params:
+            adapter = async_context.get()
+            thread_id: Optional[int] = None
+            if thread is not MISSING:
+                thread_id = thread.id
 
-        data = await adapter.execute_webhook(
-            self.id,
-            self.token,
-            session=self.session,
-            proxy=self.proxy,
-            proxy_auth=self.proxy_auth,
-            payload=params.payload,
-            multipart=params.multipart,
-            files=params.files,
-            thread_id=thread_id,
-            wait=wait,
-        )
+            data = await adapter.execute_webhook(
+                self.id,
+                self.token,
+                session=self.session,
+                proxy=self.proxy,
+                proxy_auth=self.proxy_auth,
+                payload=params.payload,
+                multipart=params.multipart,
+                files=params.files,
+                thread_id=thread_id,
+                wait=wait,
+            )
 
         msg = None
         if wait:
@@ -1883,7 +1962,7 @@ class Webhook(BaseWebhook):
             self._state.prevent_view_updates_for(message_id)
 
         previous_mentions: Optional[AllowedMentions] = getattr(self._state, 'allowed_mentions', None)
-        params = handle_message_parameters(
+        with handle_message_parameters(
             content=content,
             attachments=attachments,
             embed=embed,
@@ -1891,25 +1970,24 @@ class Webhook(BaseWebhook):
             view=view,
             allowed_mentions=allowed_mentions,
             previous_allowed_mentions=previous_mentions,
-        )
+        ) as params:
+            thread_id: Optional[int] = None
+            if thread is not MISSING:
+                thread_id = thread.id
 
-        thread_id: Optional[int] = None
-        if thread is not MISSING:
-            thread_id = thread.id
-
-        adapter = async_context.get()
-        data = await adapter.edit_webhook_message(
-            self.id,
-            self.token,
-            message_id,
-            session=self.session,
-            proxy=self.proxy,
-            proxy_auth=self.proxy_auth,
-            payload=params.payload,
-            multipart=params.multipart,
-            files=params.files,
-            thread_id=thread_id,
-        )
+            adapter = async_context.get()
+            data = await adapter.edit_webhook_message(
+                self.id,
+                self.token,
+                message_id,
+                session=self.session,
+                proxy=self.proxy,
+                proxy_auth=self.proxy_auth,
+                payload=params.payload,
+                multipart=params.multipart,
+                files=params.files,
+                thread_id=thread_id,
+            )
 
         message = self._create_message(data, thread=thread)
         if view and not view.is_finished():

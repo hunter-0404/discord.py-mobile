@@ -45,9 +45,13 @@ class _AutoModerationActionMetadataTimeout(TypedDict):
     duration_seconds: int
 
 
+class _AutoModerationActionMetadataCustomMessage(TypedDict):
+    custom_message: str
+
+
 class _AutoModerationActionBlockMessage(TypedDict):
     type: Literal[1]
-    metadata: NotRequired[Empty]
+    metadata: NotRequired[_AutoModerationActionMetadataCustomMessage]
 
 
 class _AutoModerationActionAlert(TypedDict):
@@ -65,6 +69,7 @@ AutoModerationAction = Union[_AutoModerationActionBlockMessage, _AutoModerationA
 
 class _AutoModerationTriggerMetadataKeyword(TypedDict):
     keyword_filter: List[str]
+    regex_patterns: NotRequired[List[str]]
 
 
 class _AutoModerationTriggerMetadataKeywordPreset(TypedDict):

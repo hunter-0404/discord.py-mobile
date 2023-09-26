@@ -41,6 +41,7 @@ from typing import (
     Dict,
     TYPE_CHECKING,
     Optional,
+    Sequence,
     TypeVar,
     Type,
     Union,
@@ -498,6 +499,12 @@ class BotBase(GroupMixin[None]):
 
             ``user`` parameter is now positional-only.
 
+        .. versionchanged:: 2.4
+
+            This function now respects the team member roles if the bot is team-owned.
+            In order to be considered an owner, they must be either an admin or
+            a developer.
+
         Parameters
         -----------
         user: :class:`.abc.User`
@@ -515,9 +522,13 @@ class BotBase(GroupMixin[None]):
             return user.id in self.owner_ids
         else:
 
-            app = await self.application_info()  # type: ignore
+            app: discord.AppInfo = await self.application_info()  # type: ignore
             if app.team:
-                self.owner_ids = ids = {m.id for m in app.team.members}
+                self.owner_ids = ids = {
+                    m.id
+                    for m in app.team.members
+                    if m.role in (discord.TeamMemberRole.admin, discord.TeamMemberRole.developer)
+                }
                 return user.id in ids
             else:
                 self.owner_id = owner_id = app.owner.id
@@ -703,7 +714,7 @@ class BotBase(GroupMixin[None]):
         *,
         override: bool = False,
         guild: Optional[Snowflake] = MISSING,
-        guilds: List[Snowflake] = MISSING,
+        guilds: Sequence[Snowflake] = MISSING,
     ) -> None:
         """|coro|
 
@@ -811,7 +822,7 @@ class BotBase(GroupMixin[None]):
         /,
         *,
         guild: Optional[Snowflake] = MISSING,
-        guilds: List[Snowflake] = MISSING,
+        guilds: Sequence[Snowflake] = MISSING,
     ) -> Optional[Cog]:
         """|coro|
 

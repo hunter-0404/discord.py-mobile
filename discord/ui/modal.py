@@ -31,6 +31,7 @@ from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, ClassVar, List
 
 from ..utils import MISSING, find
+from .._types import ClientT
 from .item import Item
 from .view import View
 
@@ -63,6 +64,7 @@ class Modal(View):
 
     .. code-block:: python3
 
+        import discord
         from discord import ui
 
         class Questionnaire(ui.Modal, title='Questionnaire Response'):
@@ -134,7 +136,7 @@ class Modal(View):
 
         super().__init__(timeout=timeout)
 
-    async def on_submit(self, interaction: Interaction, /) -> None:
+    async def on_submit(self, interaction: Interaction[ClientT], /) -> None:
         """|coro|
 
         Called when the modal is submitted.
@@ -146,7 +148,7 @@ class Modal(View):
         """
         pass
 
-    async def on_error(self, interaction: Interaction, error: Exception, /) -> None:
+    async def on_error(self, interaction: Interaction[ClientT], error: Exception, /) -> None:
         """|coro|
 
         A callback that is called when :meth:`on_submit`
@@ -163,21 +165,21 @@ class Modal(View):
         """
         _log.error('Ignoring exception in modal %r:', self, exc_info=error)
 
-    def _refresh(self, components: Sequence[ModalSubmitComponentInteractionDataPayload]) -> None:
+    def _refresh(self, interaction: Interaction, components: Sequence[ModalSubmitComponentInteractionDataPayload]) -> None:
         for component in components:
             if component['type'] == 1:
-                self._refresh(component['components'])
+                self._refresh(interaction, component['components'])
             else:
                 item = find(lambda i: i.custom_id == component['custom_id'], self._children)  # type: ignore
                 if item is None:
                     _log.debug("Modal interaction referencing unknown item custom_id %s. Discarding", component['custom_id'])
                     continue
-                item._refresh_state(component)  # type: ignore
+                item._refresh_state(interaction, component)  # type: ignore
 
     async def _scheduled_task(self, interaction: Interaction, components: List[ModalSubmitComponentInteractionDataPayload]):
         try:
             self._refresh_timeout()
-            self._refresh(components)
+            self._refresh(interaction, components)
 
             allow = await self.interaction_check(interaction)
             if not allow:

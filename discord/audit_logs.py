@@ -24,7 +24,7 @@ DEALINGS IN THE SOFTWARE.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, Generator, List, Optional, Tuple, Type, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Mapping, Generator, List, Optional, Tuple, Type, TypeVar, Union
 
 from . import enums, flags, utils
 from .asset import Asset
@@ -74,6 +74,7 @@ if TYPE_CHECKING:
     from .types.automod import AutoModerationTriggerMetadata, AutoModerationAction
     from .user import User
     from .app_commands import AppCommand
+    from .webhook import Webhook
 
     TargetType = Union[
         Guild,
@@ -89,6 +90,9 @@ if TYPE_CHECKING:
         Object,
         PartialIntegration,
         AutoModRule,
+        ScheduledEvent,
+        Webhook,
+        AppCommand,
         None,
     ]
 
@@ -239,10 +243,6 @@ def _transform_automod_trigger_metadata(
         except Exception:
             pass
 
-    # If cannot get trigger type from the rule and data is empty, then cannot determine trigger type
-    if not data:
-        return None
-
     # Try to infer trigger type from available keys in data
     if 'presets' in data:
         return AutoModTrigger(
@@ -251,9 +251,16 @@ def _transform_automod_trigger_metadata(
             allow_list=data.get('allow_list'),
         )
     elif 'keyword_filter' in data:
-        return AutoModTrigger(type=enums.AutoModRuleTriggerType.keyword, keyword_filter=data['keyword_filter'])  # type: ignore
+        return AutoModTrigger(
+            type=enums.AutoModRuleTriggerType.keyword,
+            keyword_filter=data['keyword_filter'],  # type: ignore
+            allow_list=data.get('allow_list'),
+            regex_patterns=data.get('regex_patterns'),
+        )
     elif 'mention_total_limit' in data:
         return AutoModTrigger(type=enums.AutoModRuleTriggerType.mention_spam, mention_limit=data['mention_total_limit'])  # type: ignore
+    else:
+        return AutoModTrigger(type=enums.AutoModRuleTriggerType.spam)
 
 
 def _transform_automod_actions(entry: AuditLogEntry, data: List[AutoModerationAction]) -> List[AutoModRuleAction]:
@@ -280,9 +287,15 @@ def _flag_transformer(cls: Type[F]) -> Callable[[AuditLogEntry, Union[int, str]]
     return _transform
 
 
-def _transform_type(entry: AuditLogEntry, data: int) -> Union[enums.ChannelType, enums.StickerType]:
+def _transform_type(
+    entry: AuditLogEntry, data: Union[int, str]
+) -> Union[enums.ChannelType, enums.StickerType, enums.WebhookType, str]:
     if entry.action.name.startswith('sticker_'):
         return enums.try_enum(enums.StickerType, data)
+    elif entry.action.name.startswith('integration_'):
+        return data  # type: ignore  # integration type is str
+    elif entry.action.name.startswith('webhook_'):
+        return enums.try_enum(enums.WebhookType, data)
     else:
         return enums.try_enum(enums.ChannelType, data)
 
@@ -312,7 +325,7 @@ Transformer = Callable[["AuditLogEntry", Any], Any]
 
 class AuditLogChanges:
     # fmt: off
-    TRANSFORMERS: ClassVar[Dict[str, Tuple[Optional[str], Optional[Transformer]]]] = {
+    TRANSFORMERS: ClassVar[Mapping[str, Tuple[Optional[str], Optional[Transformer]]]] = {
         'verification_level':                    (None, _enum_transformer(enums.VerificationLevel)),
         'explicit_content_filter':               (None, _enum_transformer(enums.ContentFilter)),
         'allow':                                 (None, _flag_transformer(Permissions)),
@@ -512,7 +525,11 @@ class _AuditLogProxyMessageBulkDelete(_AuditLogProxy):
 class _AuditLogProxyAutoModAction(_AuditLogProxy):
     automod_rule_name: str
     automod_rule_trigger_type: str
-    channel: Union[abc.GuildChannel, Thread]
+    channel: Optional[Union[abc.GuildChannel, Thread]]
+
+
+class _AuditLogProxyMemberKickOrMemberRoleUpdate(_AuditLogProxy):
+    integration_type: Optional[str]
 
 
 class AuditLogEntry(Hashable):
@@ -541,11 +558,17 @@ class AuditLogEntry(Hashable):
     -----------
     action: :class:`AuditLogAction`
         The action that was done.
-    user: :class:`abc.User`
+    user: Optional[:class:`abc.User`]
         The user who initiated this action. Usually a :class:`Member`\, unless gone
         then it's a :class:`User`.
+    user_id: Optional[:class:`int`]
+        The user ID who initiated this action.
+
+        .. versionadded:: 2.2
     id: :class:`int`
         The entry ID.
+    guild: :class:`Guild`
+        The guild that this entry belongs to.
     target: Any
         The target that got changed. The exact type of this depends on
         the action being done.
@@ -561,19 +584,21 @@ class AuditLogEntry(Hashable):
     def __init__(
         self,
         *,
-        users: Dict[int, User],
-        integrations: Dict[int, PartialIntegration],
-        app_commands: Dict[int, AppCommand],
-        automod_rules: Dict[int, AutoModRule],
+        users: Mapping[int, User],
+        integrations: Mapping[int, PartialIntegration],
+        app_commands: Mapping[int, AppCommand],
+        automod_rules: Mapping[int, AutoModRule],
+        webhooks: Mapping[int, Webhook],
         data: AuditLogEntryPayload,
         guild: Guild,
     ):
         self._state: ConnectionState = guild._state
         self.guild: Guild = guild
-        self._users: Dict[int, User] = users
-        self._integrations: Dict[int, PartialIntegration] = integrations
-        self._app_commands: Dict[int, AppCommand] = app_commands
-        self._automod_rules: Dict[int, AutoModRule] = automod_rules
+        self._users: Mapping[int, User] = users
+        self._integrations: Mapping[int, PartialIntegration] = integrations
+        self._app_commands: Mapping[int, AppCommand] = app_commands
+        self._automod_rules: Mapping[int, AutoModRule] = automod_rules
+        self._webhooks: Mapping[int, Webhook] = webhooks
         self._from_data(data)
 
     def _from_data(self, data: AuditLogEntryPayload) -> None:
@@ -593,6 +618,7 @@ class AuditLogEntry(Hashable):
             _AuditLogProxyStageInstanceAction,
             _AuditLogProxyMessageBulkDelete,
             _AuditLogProxyAutoModAction,
+            _AuditLogProxyMemberKickOrMemberRoleUpdate,
             Member, User, None, PartialIntegration,
             Role, Object
         ] = None
@@ -617,6 +643,10 @@ class AuditLogEntry(Hashable):
             elif self.action is enums.AuditLogAction.message_bulk_delete:
                 # The bulk message delete action has the number of messages deleted
                 self.extra = _AuditLogProxyMessageBulkDelete(count=int(extra['count']))
+            elif self.action in (enums.AuditLogAction.kick, enums.AuditLogAction.member_role_update):
+                # The member kick action has a dict with some information
+                integration_type = extra.get('integration_type')
+                self.extra = _AuditLogProxyMemberKickOrMemberRoleUpdate(integration_type=integration_type)
             elif self.action.name.endswith('pin'):
                 # the pin actions have a dict with some information
                 channel_id = int(extra['channel_id'])
@@ -629,13 +659,19 @@ class AuditLogEntry(Hashable):
                 or self.action is enums.AuditLogAction.automod_flag_message
                 or self.action is enums.AuditLogAction.automod_timeout_member
             ):
-                channel_id = int(extra['channel_id'])
+                channel_id = utils._get_as_snowflake(extra, 'channel_id')
+                channel = None
+
+                # May be an empty string instead of None due to a Discord issue
+                if channel_id:
+                    channel = self.guild.get_channel_or_thread(channel_id) or Object(id=channel_id)
+
                 self.extra = _AuditLogProxyAutoModAction(
                     automod_rule_name=extra['auto_moderation_rule_name'],
                     automod_rule_trigger_type=enums.try_enum(
                         enums.AutoModRuleTriggerType, extra['auto_moderation_rule_trigger_type']
                     ),
-                    channel=self.guild.get_channel_or_thread(channel_id) or Object(id=channel_id),
+                    channel=channel,
                 )
 
             elif self.action.name.startswith('overwrite_'):
@@ -666,8 +702,8 @@ class AuditLogEntry(Hashable):
         # into meaningful data when requested
         self._changes = data.get('changes', [])
 
-        user_id = utils._get_as_snowflake(data, 'user_id')
-        self.user: Optional[Union[User, Member]] = self._get_member(user_id)
+        self.user_id: Optional[int] = utils._get_as_snowflake(data, 'user_id')
+        self.user: Optional[Union[User, Member]] = self._get_member(self.user_id)
         self._target_id = utils._get_as_snowflake(data, 'target_id')
 
     def _get_member(self, user_id: Optional[int]) -> Union[Member, User, None]:
@@ -745,8 +781,13 @@ class AuditLogEntry(Hashable):
     def _convert_target_channel(self, target_id: int) -> Union[abc.GuildChannel, Object]:
         return self.guild.get_channel(target_id) or Object(id=target_id)
 
-    def _convert_target_user(self, target_id: int) -> Union[Member, User, None]:
-        return self._get_member(target_id)
+    def _convert_target_user(self, target_id: Optional[int]) -> Optional[Union[Member, User, Object]]:
+        # For some reason the member_disconnect and member_move action types
+        # do not have a non-null target_id so safeguard against that
+        if target_id is None:
+            return None
+
+        return self._get_member(target_id) or Object(id=target_id, type=Member)
 
     def _convert_target_role(self, target_id: int) -> Union[Role, Object]:
         return self.guild.get_role(target_id) or Object(id=target_id, type=Role)
@@ -775,8 +816,8 @@ class AuditLogEntry(Hashable):
     def _convert_target_emoji(self, target_id: int) -> Union[Emoji, Object]:
         return self._state.get_emoji(target_id) or Object(id=target_id, type=Emoji)
 
-    def _convert_target_message(self, target_id: int) -> Union[Member, User, None]:
-        return self._get_member(target_id)
+    def _convert_target_message(self, target_id: int) -> Union[Member, User, Object]:
+        return self._get_member(target_id) or Object(id=target_id, type=Member)
 
     def _convert_target_stage_instance(self, target_id: int) -> Union[StageInstance, Object]:
         return self.guild.get_stage_instance(target_id) or Object(id=target_id, type=StageInstance)
@@ -807,6 +848,9 @@ class AuditLogEntry(Hashable):
         target = self._get_integration_by_app_id(target_id) or self._get_app_command(target_id)
         if not target:
             try:
+                # circular import
+                from .app_commands import AppCommand
+
                 # get application id from extras
                 # if it matches target id, type should be integration
                 target_app = self.extra
@@ -822,3 +866,9 @@ class AuditLogEntry(Hashable):
 
     def _convert_target_auto_moderation(self, target_id: int) -> Union[AutoModRule, Object]:
         return self._automod_rules.get(target_id) or Object(target_id, type=AutoModRule)
+
+    def _convert_target_webhook(self, target_id: int) -> Union[Webhook, Object]:
+        # circular import
+        from .webhook import Webhook
+
+        return self._webhooks.get(target_id) or Object(target_id, type=Webhook)

@@ -47,7 +47,7 @@ import datetime
 import discord.abc
 from .scheduled_event import ScheduledEvent
 from .permissions import PermissionOverwrite, Permissions
-from .enums import ChannelType, PrivacyLevel, try_enum, VideoQualityMode, EntityType
+from .enums import ChannelType, ForumLayoutType, ForumOrderType, PrivacyLevel, try_enum, VideoQualityMode, EntityType
 from .mixins import Hashable
 from . import utils
 from .utils import MISSING
@@ -98,6 +98,7 @@ if TYPE_CHECKING:
         CategoryChannel as CategoryChannelPayload,
         GroupDMChannel as GroupChannelPayload,
         ForumChannel as ForumChannelPayload,
+        MediaChannel as MediaChannelPayload,
         ForumTag as ForumTagPayload,
     )
     from .types.snowflake import SnowflakeList
@@ -151,7 +152,7 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
         *not* point to an existing or valid message.
     slowmode_delay: :class:`int`
         The number of seconds a member must wait between sending messages
-        in this channel. A value of `0` denotes that it is disabled.
+        in this channel. A value of ``0`` denotes that it is disabled.
         Bots and users with :attr:`~Permissions.manage_channels` or
         :attr:`~Permissions.manage_messages` bypass slowmode.
     nsfw: :class:`bool`
@@ -160,6 +161,10 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
         The default auto archive duration in minutes for threads created in this channel.
 
         .. versionadded:: 2.0
+    default_thread_slowmode_delay: :class:`int`
+        The default slowmode delay in seconds for threads created in this channel.
+
+        .. versionadded:: 2.3
     """
 
     __slots__ = (
@@ -176,6 +181,7 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
         '_type',
         'last_message_id',
         'default_auto_archive_duration',
+        'default_thread_slowmode_delay',
     )
 
     def __init__(self, *, state: ConnectionState, guild: Guild, data: Union[TextChannelPayload, NewsChannelPayload]):
@@ -206,6 +212,7 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
         # Does this need coercion into `int`? No idea yet.
         self.slowmode_delay: int = data.get('rate_limit_per_user', 0)
         self.default_auto_archive_duration: ThreadArchiveDuration = data.get('default_auto_archive_duration', 1440)
+        self.default_thread_slowmode_delay: int = data.get('default_thread_rate_limit_per_user', 0)
         self._type: Literal[0, 5] = data.get('type', self._type)
         self.last_message_id: Optional[int] = utils._get_as_snowflake(data, 'last_message_id')
         self._fill_overwrites(data)
@@ -231,6 +238,7 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
     @utils.copy_doc(discord.abc.GuildChannel.permissions_for)
     def permissions_for(self, obj: Union[Member, Role], /) -> Permissions:
         base = super().permissions_for(obj)
+        self._apply_implicit_permissions(base)
 
         # text channels do not have voice related permissions
         denied = Permissions.voice()
@@ -300,6 +308,7 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
         category: Optional[CategoryChannel] = ...,
         slowmode_delay: int = ...,
         default_auto_archive_duration: ThreadArchiveDuration = ...,
+        default_thread_slowmode_delay: int = ...,
         type: ChannelType = ...,
         overwrites: Mapping[OverwriteKeyT, PermissionOverwrite] = ...,
     ) -> TextChannel:
@@ -343,7 +352,7 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
             category.
         slowmode_delay: :class:`int`
             Specifies the slowmode rate limit for user in this channel, in seconds.
-            A value of `0` disables slowmode. The maximum value possible is `21600`.
+            A value of ``0`` disables slowmode. The maximum value possible is ``21600``.
         type: :class:`ChannelType`
             Change the type of this text channel. Currently, only conversion between
             :attr:`ChannelType.text` and :attr:`ChannelType.news` is supported. This
@@ -358,7 +367,10 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
             Must be one of ``60``, ``1440``, ``4320``, or ``10080``.
 
             .. versionadded:: 2.0
+        default_thread_slowmode_delay: :class:`int`
+            The new default slowmode delay in seconds for threads created in this channel.
 
+            .. versionadded:: 2.3
         Raises
         ------
         ValueError
@@ -726,8 +738,10 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
             If ``None`` is passed then a private thread is created.
             Defaults to ``None``.
         auto_archive_duration: :class:`int`
-            The duration in minutes before a thread is automatically archived for inactivity.
+            The duration in minutes before a thread is automatically hidden from the channel list.
             If not provided, the channel's default auto archive duration is used.
+
+            Must be one of ``60``, ``1440``, ``4320``, or ``10080``, if provided.
         type: Optional[:class:`ChannelType`]
             The type of thread to create. If a ``message`` is passed then this parameter
             is ignored, as a thread created with a message is always a public thread.
@@ -739,7 +753,7 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
             Defaults to ``True``.
         slowmode_delay: Optional[:class:`int`]
             Specifies the slowmode rate limit for user in this channel, in seconds.
-            The maximum value possible is `21600`. By default no slowmode rate limit
+            The maximum value possible is ``21600``. By default no slowmode rate limit
             if this is ``None``.
 
         Raises
@@ -763,7 +777,7 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
                 self.id,
                 name=name,
                 auto_archive_duration=auto_archive_duration or self.default_auto_archive_duration,
-                type=type.value,
+                type=type.value,  # type: ignore # we're assuming that the user is passing a valid variant
                 reason=reason,
                 invitable=invitable,
                 rate_limit_per_user=slowmode_delay,
@@ -875,7 +889,7 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
             before_timestamp = update_before(threads[-1])
 
 
-class VocalGuildChannel(discord.abc.Connectable, discord.abc.GuildChannel, Hashable):
+class VocalGuildChannel(discord.abc.Messageable, discord.abc.Connectable, discord.abc.GuildChannel, Hashable):
     __slots__ = (
         'name',
         'id',
@@ -885,6 +899,7 @@ class VocalGuildChannel(discord.abc.Connectable, discord.abc.GuildChannel, Hasha
         'user_limit',
         '_state',
         'position',
+        'slowmode_delay',
         '_overwrites',
         'category_id',
         'rtc_region',
@@ -896,6 +911,9 @@ class VocalGuildChannel(discord.abc.Connectable, discord.abc.GuildChannel, Hasha
         self._state: ConnectionState = state
         self.id: int = int(data['id'])
         self._update(guild, data)
+
+    async def _get_channel(self) -> Self:
+        return self
 
     def _get_voice_client_key(self) -> Tuple[int, str]:
         return self.guild.id, 'guild_id'
@@ -912,6 +930,7 @@ class VocalGuildChannel(discord.abc.Connectable, discord.abc.GuildChannel, Hasha
         self.category_id: Optional[int] = utils._get_as_snowflake(data, 'parent_id')
         self.last_message_id: Optional[int] = utils._get_as_snowflake(data, 'last_message_id')
         self.position: int = data['position']
+        self.slowmode_delay = data.get('rate_limit_per_user', 0)
         self.bitrate: int = data['bitrate']
         self.user_limit: int = data['user_limit']
         self._fill_overwrites(data)
@@ -973,6 +992,7 @@ class VocalGuildChannel(discord.abc.Connectable, discord.abc.GuildChannel, Hasha
     @utils.copy_doc(discord.abc.GuildChannel.permissions_for)
     def permissions_for(self, obj: Union[Member, Role], /) -> Permissions:
         base = super().permissions_for(obj)
+        self._apply_implicit_permissions(base)
 
         # voice channels cannot be edited by people who can't connect to them
         # It also implicitly denies all other voice perms
@@ -981,96 +1001,6 @@ class VocalGuildChannel(discord.abc.Connectable, discord.abc.GuildChannel, Hasha
             denied.update(manage_channels=True, manage_roles=True)
             base.value &= ~denied.value
         return base
-
-
-class VoiceChannel(discord.abc.Messageable, VocalGuildChannel):
-    """Represents a Discord guild voice channel.
-
-    .. container:: operations
-
-        .. describe:: x == y
-
-            Checks if two channels are equal.
-
-        .. describe:: x != y
-
-            Checks if two channels are not equal.
-
-        .. describe:: hash(x)
-
-            Returns the channel's hash.
-
-        .. describe:: str(x)
-
-            Returns the channel's name.
-
-    Attributes
-    -----------
-    name: :class:`str`
-        The channel name.
-    guild: :class:`Guild`
-        The guild the channel belongs to.
-    id: :class:`int`
-        The channel ID.
-    nsfw: :class:`bool`
-        If the channel is marked as "not safe for work" or "age restricted".
-
-        .. versionadded:: 2.0
-    category_id: Optional[:class:`int`]
-        The category channel ID this channel belongs to, if applicable.
-    position: :class:`int`
-        The position in the channel list. This is a number that starts at 0. e.g. the
-        top channel is position 0.
-    bitrate: :class:`int`
-        The channel's preferred audio bitrate in bits per second.
-    user_limit: :class:`int`
-        The channel's limit for number of members that can be in a voice channel.
-    rtc_region: Optional[:class:`str`]
-        The region for the voice channel's voice communication.
-        A value of ``None`` indicates automatic voice region detection.
-
-        .. versionadded:: 1.7
-
-        .. versionchanged:: 2.0
-            The type of this attribute has changed to :class:`str`.
-    video_quality_mode: :class:`VideoQualityMode`
-        The camera video quality for the voice channel's participants.
-
-        .. versionadded:: 2.0
-    last_message_id: Optional[:class:`int`]
-        The last message ID of the message sent to this channel. It may
-        *not* point to an existing or valid message.
-
-        .. versionadded:: 2.0
-    """
-
-    __slots__ = ()
-
-    def __repr__(self) -> str:
-        attrs = [
-            ('id', self.id),
-            ('name', self.name),
-            ('rtc_region', self.rtc_region),
-            ('position', self.position),
-            ('bitrate', self.bitrate),
-            ('video_quality_mode', self.video_quality_mode),
-            ('user_limit', self.user_limit),
-            ('category_id', self.category_id),
-        ]
-        joined = ' '.join('%s=%r' % t for t in attrs)
-        return f'<{self.__class__.__name__} {joined}>'
-
-    async def _get_channel(self) -> Self:
-        return self
-
-    @property
-    def _scheduled_event_entity_type(self) -> Optional[EntityType]:
-        return EntityType.voice
-
-    @property
-    def type(self) -> Literal[ChannelType.voice]:
-        """:class:`ChannelType`: The channel's Discord type."""
-        return ChannelType.voice
 
     @property
     def last_message(self) -> Optional[Message]:
@@ -1116,7 +1046,7 @@ class VoiceChannel(discord.abc.Messageable, VocalGuildChannel):
 
         from .message import PartialMessage
 
-        return PartialMessage(channel=self, id=message_id)
+        return PartialMessage(channel=self, id=message_id)  # type: ignore # VocalGuildChannel is an impl detail
 
     async def delete_messages(self, messages: Iterable[Snowflake], *, reason: Optional[str] = None) -> None:
         """|coro|
@@ -1319,6 +1249,100 @@ class VoiceChannel(discord.abc.Messageable, VocalGuildChannel):
         data = await self._state.http.create_webhook(self.id, name=str(name), avatar=avatar, reason=reason)
         return Webhook.from_state(data, state=self._state)
 
+
+class VoiceChannel(VocalGuildChannel):
+    """Represents a Discord guild voice channel.
+
+    .. container:: operations
+
+        .. describe:: x == y
+
+            Checks if two channels are equal.
+
+        .. describe:: x != y
+
+            Checks if two channels are not equal.
+
+        .. describe:: hash(x)
+
+            Returns the channel's hash.
+
+        .. describe:: str(x)
+
+            Returns the channel's name.
+
+    Attributes
+    -----------
+    name: :class:`str`
+        The channel name.
+    guild: :class:`Guild`
+        The guild the channel belongs to.
+    id: :class:`int`
+        The channel ID.
+    nsfw: :class:`bool`
+        If the channel is marked as "not safe for work" or "age restricted".
+
+        .. versionadded:: 2.0
+    category_id: Optional[:class:`int`]
+        The category channel ID this channel belongs to, if applicable.
+    position: :class:`int`
+        The position in the channel list. This is a number that starts at 0. e.g. the
+        top channel is position 0.
+    bitrate: :class:`int`
+        The channel's preferred audio bitrate in bits per second.
+    user_limit: :class:`int`
+        The channel's limit for number of members that can be in a voice channel.
+    rtc_region: Optional[:class:`str`]
+        The region for the voice channel's voice communication.
+        A value of ``None`` indicates automatic voice region detection.
+
+        .. versionadded:: 1.7
+
+        .. versionchanged:: 2.0
+            The type of this attribute has changed to :class:`str`.
+    video_quality_mode: :class:`VideoQualityMode`
+        The camera video quality for the voice channel's participants.
+
+        .. versionadded:: 2.0
+    last_message_id: Optional[:class:`int`]
+        The last message ID of the message sent to this channel. It may
+        *not* point to an existing or valid message.
+
+        .. versionadded:: 2.0
+    slowmode_delay: :class:`int`
+        The number of seconds a member must wait between sending messages
+        in this channel. A value of ``0`` denotes that it is disabled.
+        Bots and users with :attr:`~Permissions.manage_channels` or
+        :attr:`~Permissions.manage_messages` bypass slowmode.
+
+        .. versionadded:: 2.2
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        attrs = [
+            ('id', self.id),
+            ('name', self.name),
+            ('rtc_region', self.rtc_region),
+            ('position', self.position),
+            ('bitrate', self.bitrate),
+            ('video_quality_mode', self.video_quality_mode),
+            ('user_limit', self.user_limit),
+            ('category_id', self.category_id),
+        ]
+        joined = ' '.join('%s=%r' % t for t in attrs)
+        return f'<{self.__class__.__name__} {joined}>'
+
+    @property
+    def _scheduled_event_entity_type(self) -> Optional[EntityType]:
+        return EntityType.voice
+
+    @property
+    def type(self) -> Literal[ChannelType.voice]:
+        """:class:`ChannelType`: The channel's Discord type."""
+        return ChannelType.voice
+
     @utils.copy_doc(discord.abc.GuildChannel.clone)
     async def clone(self, *, name: Optional[str] = None, reason: Optional[str] = None) -> VoiceChannel:
         return await self._clone_impl({'bitrate': self.bitrate, 'user_limit': self.user_limit}, name=name, reason=reason)
@@ -1345,6 +1369,7 @@ class VoiceChannel(discord.abc.Messageable, VocalGuildChannel):
         overwrites: Mapping[OverwriteKeyT, PermissionOverwrite] = ...,
         rtc_region: Optional[str] = ...,
         video_quality_mode: VideoQualityMode = ...,
+        slowmode_delay: int = ...,
         reason: Optional[str] = ...,
     ) -> VoiceChannel:
         ...
@@ -1387,6 +1412,9 @@ class VoiceChannel(discord.abc.Messageable, VocalGuildChannel):
         category: Optional[:class:`CategoryChannel`]
             The new category for this channel. Can be ``None`` to remove the
             category.
+        slowmode_delay: :class:`int`
+            Specifies the slowmode rate limit for user in this channel, in seconds.
+            A value of ``0`` disables slowmode. The maximum value possible is ``21600``.
         reason: Optional[:class:`str`]
             The reason for editing this channel. Shows up on the audit log.
         overwrites: :class:`Mapping`
@@ -1417,7 +1445,6 @@ class VoiceChannel(discord.abc.Messageable, VocalGuildChannel):
             The newly edited voice channel. If the edit was only positional
             then ``None`` is returned instead.
         """
-
         payload = await self._edit(options, reason=reason)
         if payload is not None:
             # the payload will always be the proper channel payload
@@ -1477,6 +1504,18 @@ class StageChannel(VocalGuildChannel):
         The camera video quality for the stage channel's participants.
 
         .. versionadded:: 2.0
+    last_message_id: Optional[:class:`int`]
+        The last message ID of the message sent to this channel. It may
+        *not* point to an existing or valid message.
+
+        .. versionadded:: 2.2
+    slowmode_delay: :class:`int`
+        The number of seconds a member must wait between sending messages
+        in this channel. A value of ``0`` denotes that it is disabled.
+        Bots and users with :attr:`~Permissions.manage_channels` or
+        :attr:`~Permissions.manage_messages` bypass slowmode.
+
+        .. versionadded:: 2.2
     """
 
     __slots__ = ('topic',)
@@ -1556,7 +1595,12 @@ class StageChannel(VocalGuildChannel):
         return utils.get(self.guild.stage_instances, channel_id=self.id)
 
     async def create_instance(
-        self, *, topic: str, privacy_level: PrivacyLevel = MISSING, reason: Optional[str] = None
+        self,
+        *,
+        topic: str,
+        privacy_level: PrivacyLevel = MISSING,
+        send_start_notification: bool = False,
+        reason: Optional[str] = None,
     ) -> StageInstance:
         """|coro|
 
@@ -1572,6 +1616,11 @@ class StageChannel(VocalGuildChannel):
             The stage instance's topic.
         privacy_level: :class:`PrivacyLevel`
             The stage instance's privacy level. Defaults to :attr:`PrivacyLevel.guild_only`.
+        send_start_notification: :class:`bool`
+            Whether to send a start notification. This sends a push notification to @everyone if ``True``. Defaults to ``False``.
+            You must have :attr:`~Permissions.mention_everyone` to do this.
+
+            .. versionadded:: 2.3
         reason: :class:`str`
             The reason the stage instance was created. Shows up on the audit log.
 
@@ -1597,6 +1646,8 @@ class StageChannel(VocalGuildChannel):
                 raise TypeError('privacy_level field must be of type PrivacyLevel')
 
             payload['privacy_level'] = privacy_level.value
+
+        payload['send_start_notification'] = send_start_notification
 
         data = await self._state.http.create_stage_instance(**payload, reason=reason)
         return StageInstance(guild=self.guild, state=self._state, data=data)
@@ -1637,12 +1688,14 @@ class StageChannel(VocalGuildChannel):
         *,
         name: str = ...,
         nsfw: bool = ...,
+        user_limit: int = ...,
         position: int = ...,
         sync_permissions: int = ...,
         category: Optional[CategoryChannel] = ...,
         overwrites: Mapping[OverwriteKeyT, PermissionOverwrite] = ...,
         rtc_region: Optional[str] = ...,
         video_quality_mode: VideoQualityMode = ...,
+        slowmode_delay: int = ...,
         reason: Optional[str] = ...,
     ) -> StageChannel:
         ...
@@ -1675,12 +1728,17 @@ class StageChannel(VocalGuildChannel):
             The new channel's position.
         nsfw: :class:`bool`
             To mark the channel as NSFW or not.
+        user_limit: :class:`int`
+            The new channel's user limit.
         sync_permissions: :class:`bool`
             Whether to sync permissions with the channel's new or pre-existing
             category. Defaults to ``False``.
         category: Optional[:class:`CategoryChannel`]
             The new category for this channel. Can be ``None`` to remove the
             category.
+        slowmode_delay: :class:`int`
+            Specifies the slowmode rate limit for user in this channel, in seconds.
+            A value of ``0`` disables slowmode. The maximum value possible is ``21600``.
         reason: Optional[:class:`str`]
             The reason for editing this channel. Shows up on the audit log.
         overwrites: :class:`Mapping`
@@ -1914,6 +1972,16 @@ class CategoryChannel(discord.abc.GuildChannel, Hashable):
         ret.sort(key=lambda c: (c.position, c.id))
         return ret
 
+    @property
+    def forums(self) -> List[ForumChannel]:
+        """List[:class:`ForumChannel`]: Returns the forum channels that are under this category.
+
+        .. versionadded:: 2.4
+        """
+        r = [c for c in self.guild.channels if c.category_id == self.id and isinstance(c, ForumChannel)]
+        r.sort(key=lambda c: (c.position, c.id))
+        return r
+
     async def create_text_channel(self, name: str, **options: Any) -> TextChannel:
         """|coro|
 
@@ -2101,7 +2169,7 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
         It may *not* point to an existing or valid thread or message.
     slowmode_delay: :class:`int`
         The number of seconds a member must wait between creating threads
-        in this forum. A value of `0` denotes that it is disabled.
+        in this forum. A value of ``0`` denotes that it is disabled.
         Bots and users with :attr:`~Permissions.manage_channels` or
         :attr:`~Permissions.manage_messages` bypass slowmode.
     nsfw: :class:`bool`
@@ -2117,6 +2185,15 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
         add reaction button.
 
         .. versionadded:: 2.1
+    default_layout: :class:`ForumLayoutType`
+        The default layout for posts in this forum channel.
+        Defaults to :attr:`ForumLayoutType.not_set`.
+
+        .. versionadded:: 2.2
+    default_sort_order: Optional[:class:`ForumOrderType`]
+        The default sort order for posts in this forum channel.
+
+        .. versionadded:: 2.3
     """
 
     __slots__ = (
@@ -2126,6 +2203,7 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
         'topic',
         '_state',
         '_flags',
+        '_type',
         'nsfw',
         'category_id',
         'position',
@@ -2135,13 +2213,16 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
         'default_auto_archive_duration',
         'default_thread_slowmode_delay',
         'default_reaction_emoji',
+        'default_layout',
+        'default_sort_order',
         '_available_tags',
         '_flags',
     )
 
-    def __init__(self, *, state: ConnectionState, guild: Guild, data: ForumChannelPayload):
+    def __init__(self, *, state: ConnectionState, guild: Guild, data: Union[ForumChannelPayload, MediaChannelPayload]):
         self._state: ConnectionState = state
         self.id: int = int(data['id'])
+        self._type: Literal[15, 16] = data['type']
         self._update(guild, data)
 
     def __repr__(self) -> str:
@@ -2155,7 +2236,7 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
         joined = ' '.join('%s=%r' % t for t in attrs)
         return f'<{self.__class__.__name__} {joined}>'
 
-    def _update(self, guild: Guild, data: ForumChannelPayload) -> None:
+    def _update(self, guild: Guild, data: Union[ForumChannelPayload, MediaChannelPayload]) -> None:
         self.guild: Guild = guild
         self.name: str = data['name']
         self.category_id: Optional[int] = utils._get_as_snowflake(data, 'parent_id')
@@ -2168,6 +2249,7 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
         # This takes advantage of the fact that dicts are ordered since Python 3.7
         tags = [ForumTag.from_data(state=self._state, data=tag) for tag in data.get('available_tags', [])]
         self.default_thread_slowmode_delay: int = data.get('default_thread_rate_limit_per_user', 0)
+        self.default_layout: ForumLayoutType = try_enum(ForumLayoutType, data.get('default_forum_layout', 0))
         self._available_tags: Dict[int, ForumTag] = {tag.id: tag for tag in tags}
 
         self.default_reaction_emoji: Optional[PartialEmoji] = None
@@ -2179,12 +2261,19 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
                 name=default_reaction_emoji.get('emoji_name') or '',
             )
 
+        self.default_sort_order: Optional[ForumOrderType] = None
+        default_sort_order = data.get('default_sort_order')
+        if default_sort_order is not None:
+            self.default_sort_order = try_enum(ForumOrderType, default_sort_order)
+
         self._flags: int = data.get('flags', 0)
         self._fill_overwrites(data)
 
     @property
-    def type(self) -> Literal[ChannelType.forum]:
+    def type(self) -> Literal[ChannelType.forum, ChannelType.media]:
         """:class:`ChannelType`: The channel's Discord type."""
+        if self._type == 16:
+            return ChannelType.media
         return ChannelType.forum
 
     @property
@@ -2198,11 +2287,37 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
     @utils.copy_doc(discord.abc.GuildChannel.permissions_for)
     def permissions_for(self, obj: Union[Member, Role], /) -> Permissions:
         base = super().permissions_for(obj)
+        self._apply_implicit_permissions(base)
 
         # text channels do not have voice related permissions
         denied = Permissions.voice()
         base.value &= ~denied.value
         return base
+
+    def get_thread(self, thread_id: int, /) -> Optional[Thread]:
+        """Returns a thread with the given ID.
+
+        .. note::
+
+            This does not always retrieve archived threads, as they are not retained in the internal
+            cache. Use :func:`Guild.fetch_channel` instead.
+
+        .. versionadded:: 2.2
+
+        Parameters
+        -----------
+        thread_id: :class:`int`
+            The ID to search for.
+
+        Returns
+        --------
+        Optional[:class:`Thread`]
+            The returned thread or ``None`` if not found.
+        """
+        thread = self.guild.get_thread(thread_id)
+        if thread is not None and thread.parent_id == self.id:
+            return thread
+        return None
 
     @property
     def threads(self) -> List[Thread]:
@@ -2246,6 +2361,13 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
         """:class:`bool`: Checks if the forum is NSFW."""
         return self.nsfw
 
+    def is_media(self) -> bool:
+        """:class:`bool`: Checks if the channel is a media channel.
+
+        .. versionadded:: 2.4
+        """
+        return self._type == ChannelType.media.value
+
     @utils.copy_doc(discord.abc.GuildChannel.clone)
     async def clone(self, *, name: Optional[str] = None, reason: Optional[str] = None) -> ForumChannel:
         return await self._clone_impl(
@@ -2278,6 +2400,8 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
         available_tags: Sequence[ForumTag] = ...,
         default_thread_slowmode_delay: int = ...,
         default_reaction_emoji: Optional[EmojiInputType] = ...,
+        default_layout: ForumLayoutType = ...,
+        default_sort_order: ForumOrderType = ...,
         require_tag: bool = ...,
     ) -> ForumChannel:
         ...
@@ -2307,7 +2431,7 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
             category.
         slowmode_delay: :class:`int`
             Specifies the slowmode rate limit for user in this forum, in seconds.
-            A value of `0` disables slowmode. The maximum value possible is `21600`.
+            A value of ``0`` disables slowmode. The maximum value possible is ``21600``.
         type: :class:`ChannelType`
             Change the type of this text forum. Currently, only conversion between
             :attr:`ChannelType.text` and :attr:`ChannelType.news` is supported. This
@@ -2332,6 +2456,14 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
             The new default reaction emoji for threads in this channel.
 
             .. versionadded:: 2.1
+        default_layout: :class:`ForumLayoutType`
+            The new default layout for posts in this forum.
+
+            .. versionadded:: 2.2
+        default_sort_order: Optional[:class:`ForumOrderType`]
+            The new default sort order for posts in this forum.
+
+            .. versionadded:: 2.3
         require_tag: :class:`bool`
             Whether to require a tag for threads in this channel or not.
 
@@ -2342,7 +2474,8 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
         ValueError
             The new ``position`` is less than 0 or greater than the number of channels.
         TypeError
-            The permission overwrite information is not in proper form.
+            The permission overwrite information is not in proper form or a type
+            is not the expected type.
         Forbidden
             You do not have permissions to edit the forum.
         HTTPException
@@ -2382,6 +2515,31 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
             flags = self.flags
             flags.require_tag = require_tag
             options['flags'] = flags.value
+
+        try:
+            layout = options.pop('default_layout')
+        except KeyError:
+            pass
+        else:
+            if not isinstance(layout, ForumLayoutType):
+                raise TypeError(f'default_layout parameter must be a ForumLayoutType not {layout.__class__.__name__}')
+
+            options['default_forum_layout'] = layout.value
+
+        try:
+            sort_order = options.pop('default_sort_order')
+        except KeyError:
+            pass
+        else:
+            if sort_order is None:
+                options['default_sort_order'] = None
+            else:
+                if not isinstance(sort_order, ForumOrderType):
+                    raise TypeError(
+                        f'default_sort_order parameter must be a ForumOrderType not {sort_order.__class__.__name__}'
+                    )
+
+                options['default_sort_order'] = sort_order.value
 
         payload = await self._edit(options, reason=reason)
         if payload is not None:
@@ -2466,16 +2624,21 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
         This thread is a public thread with the initial message given. Currently in order
         to start a thread in this forum, the user needs :attr:`~discord.Permissions.send_messages`.
 
+        You must send at least one of ``content``, ``embed``, ``embeds``, ``file``, ``files``,
+        or ``view`` to create a thread in a forum, since forum channels must have a starter message.
+
         Parameters
         -----------
         name: :class:`str`
             The name of the thread.
         auto_archive_duration: :class:`int`
-            The duration in minutes before a thread is automatically archived for inactivity.
+            The duration in minutes before a thread is automatically hidden from the channel list.
             If not provided, the channel's default auto archive duration is used.
+
+            Must be one of ``60``, ``1440``, ``4320``, or ``10080``, if provided.
         slowmode_delay: Optional[:class:`int`]
             Specifies the slowmode rate limit for user in this channel, in seconds.
-            The maximum value possible is `21600`. By default no slowmode rate limit
+            The maximum value possible is ``21600``. By default no slowmode rate limit
             if this is ``None``.
         content: Optional[:class:`str`]
             The content of the message to send with the thread.
@@ -2578,7 +2741,7 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
             data = await state.http.start_thread_in_forum(self.id, params=params, reason=reason)
             thread = Thread(guild=self.guild, state=self._state, data=data)
             message = Message(state=self._state, channel=thread, data=data['message'])
-            if view:
+            if view and not view.is_finished():
                 self._state.store_view(view, message.id)
 
             return ThreadWithMessage(thread=thread, message=message)
@@ -2749,7 +2912,12 @@ class DMChannel(discord.abc.Messageable, discord.abc.PrivateChannel, Hashable):
 
     def __init__(self, *, me: ClientUser, state: ConnectionState, data: DMChannelPayload):
         self._state: ConnectionState = state
-        self.recipient: Optional[User] = state.store_user(data['recipients'][0])
+        self.recipient: Optional[User] = None
+
+        recipients = data.get('recipients')
+        if recipients is not None:
+            self.recipient = state.store_user(recipients[0])
+
         self.me: ClientUser = me
         self.id: int = int(data['id'])
 
@@ -3157,6 +3325,8 @@ def _guild_channel_factory(channel_type: int):
     elif value is ChannelType.stage_voice:
         return StageChannel, value
     elif value is ChannelType.forum:
+        return ForumChannel, value
+    elif value is ChannelType.media:
         return ForumChannel, value
     else:
         return None, value

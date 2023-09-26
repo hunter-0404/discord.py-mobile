@@ -151,6 +151,7 @@ def get_signature_parameters(
             parameter._default = default.default
             parameter._description = default._description
             parameter._displayed_default = default._displayed_default
+            parameter._displayed_name = default._displayed_name
 
         annotation = parameter.annotation
 
@@ -194,8 +195,13 @@ def extract_descriptions_from_docstring(function: Callable[..., Any], params: Di
     description, param_docstring = divide
     for match in NUMPY_DOCSTRING_ARG_REGEX.finditer(param_docstring):
         name = match.group('name')
+
         if name not in params:
-            continue
+            is_display_name = discord.utils.get(params.values(), displayed_name=name)
+            if is_display_name:
+                name = is_display_name.name
+            else:
+                continue
 
         param = params[name]
         if param.description is None:
@@ -451,11 +457,11 @@ class Command(_BaseCommand, Generic[CogT, P, T]):
         self.require_var_positional: bool = kwargs.get('require_var_positional', False)
         self.ignore_extra: bool = kwargs.get('ignore_extra', True)
         self.cooldown_after_parsing: bool = kwargs.get('cooldown_after_parsing', False)
-        self._cog: CogT = None
+        self._cog: CogT = None  # type: ignore # This breaks every other pyright release
 
         # bandaid for the fact that sometimes parent can be the bot instance
         parent: Optional[GroupMixin[Any]] = kwargs.get('parent')
-        self.parent: Optional[GroupMixin[Any]] = parent if isinstance(parent, _BaseCommand) else None
+        self.parent: Optional[GroupMixin[Any]] = parent if isinstance(parent, _BaseCommand) else None  # type: ignore # Does not recognise mixin usage
 
         self._before_invoke: Optional[Hook] = None
         try:
@@ -770,7 +776,7 @@ class Command(_BaseCommand, Generic[CogT, P, T]):
         command = self
         # command.parent is type-hinted as GroupMixin some attributes are resolved via MRO
         while command.parent is not None:  # type: ignore
-            command = command.parent  # type: ignore
+            command = command.parent
             entries.append(command.name)  # type: ignore
 
         return ' '.join(reversed(entries))
@@ -788,7 +794,7 @@ class Command(_BaseCommand, Generic[CogT, P, T]):
         entries = []
         command = self
         while command.parent is not None:  # type: ignore
-            command = command.parent  # type: ignore
+            command = command.parent
             entries.append(command)
 
         return entries
@@ -1169,7 +1175,9 @@ class Command(_BaseCommand, Generic[CogT, P, T]):
             return ''
 
         result = []
-        for name, param in params.items():
+        for param in params.values():
+            name = param.displayed_name or param.name
+
             greedy = isinstance(param.converter, Greedy)
             optional = False  # postpone evaluation of if it's an optional argument
 
@@ -1996,7 +2004,7 @@ def check_any(*checks: Check[ContextT]) -> Check[ContextT]:
         # if we're here, all checks failed
         raise CheckAnyFailure(unwrapped, errors)
 
-    return check(predicate)  # type: ignore
+    return check(predicate)
 
 
 def has_role(item: Union[int, str], /) -> Check[Any]:
@@ -2036,7 +2044,7 @@ def has_role(item: Union[int, str], /) -> Check[Any]:
 
         # ctx.guild is None doesn't narrow ctx.author to Member
         if isinstance(item, int):
-            role = discord.utils.get(ctx.author.roles, id=item)  # type: ignore
+            role = ctx.author.get_role(item)  # type: ignore
         else:
             role = discord.utils.get(ctx.author.roles, name=item)  # type: ignore
         if role is None:
@@ -2049,7 +2057,7 @@ def has_role(item: Union[int, str], /) -> Check[Any]:
 def has_any_role(*items: Union[int, str]) -> Callable[[T], T]:
     r"""A :func:`.check` that is added that checks if the member invoking the
     command has **any** of the roles specified. This means that if they have
-    one out of the three roles specified, then this check will return `True`.
+    one out of the three roles specified, then this check will return ``True``.
 
     Similar to :func:`.has_role`\, the names or IDs passed in must be exact.
 
@@ -2083,8 +2091,12 @@ def has_any_role(*items: Union[int, str]) -> Callable[[T], T]:
             raise NoPrivateMessage()
 
         # ctx.guild is None doesn't narrow ctx.author to Member
-        getter = functools.partial(discord.utils.get, ctx.author.roles)
-        if any(getter(id=item) is not None if isinstance(item, int) else getter(name=item) is not None for item in items):
+        if any(
+            ctx.author.get_role(item) is not None
+            if isinstance(item, int)
+            else discord.utils.get(ctx.author.roles, name=item) is not None
+            for item in items
+        ):
             return True
         raise MissingAnyRole(list(items))
 
@@ -2113,11 +2125,10 @@ def bot_has_role(item: int, /) -> Callable[[T], T]:
         if ctx.guild is None:
             raise NoPrivateMessage()
 
-        me = ctx.me
         if isinstance(item, int):
-            role = discord.utils.get(me.roles, id=item)
+            role = ctx.me.get_role(item)
         else:
-            role = discord.utils.get(me.roles, name=item)
+            role = discord.utils.get(ctx.me.roles, name=item)
         if role is None:
             raise BotMissingRole(item)
         return True
@@ -2144,8 +2155,10 @@ def bot_has_any_role(*items: int) -> Callable[[T], T]:
             raise NoPrivateMessage()
 
         me = ctx.me
-        getter = functools.partial(discord.utils.get, me.roles)
-        if any(getter(id=item) is not None if isinstance(item, int) else getter(name=item) is not None for item in items):
+        if any(
+            me.get_role(item) is not None if isinstance(item, int) else discord.utils.get(me.roles, name=item) is not None
+            for item in items
+        ):
             return True
         raise BotMissingAnyRole(list(items))
 

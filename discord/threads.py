@@ -29,10 +29,11 @@ from datetime import datetime
 import array
 
 from .mixins import Hashable
-from .abc import Messageable, _purge_helper
+from .abc import Messageable, GuildChannel, _purge_helper
 from .enums import ChannelType, try_enum
 from .errors import ClientException
 from .flags import ChannelFlags
+from .permissions import Permissions
 from .utils import MISSING, parse_time, _get_as_snowflake, _unique
 
 __all__ = (
@@ -56,7 +57,6 @@ if TYPE_CHECKING:
     from .message import Message, PartialMessage
     from .abc import Snowflake, SnowflakeTime
     from .role import Role
-    from .permissions import Permissions
     from .state import ConnectionState
 
     ThreadChannelType = Literal[ChannelType.news_thread, ChannelType.public_thread, ChannelType.private_thread]
@@ -102,7 +102,7 @@ class Thread(Messageable, Hashable):
         *not* point to an existing or valid message.
     slowmode_delay: :class:`int`
         The number of seconds a member must wait between sending messages
-        in this thread. A value of `0` denotes that it is disabled.
+        in this thread. A value of ``0`` denotes that it is disabled.
         Bots and users with :attr:`~Permissions.manage_channels` or
         :attr:`~Permissions.manage_messages` bypass slowmode.
     message_count: :class:`int`
@@ -122,7 +122,7 @@ class Thread(Messageable, Hashable):
     archiver_id: Optional[:class:`int`]
         The user's ID that archived this thread.
     auto_archive_duration: :class:`int`
-        The duration in minutes until the thread is automatically archived due to inactivity.
+        The duration in minutes until the thread is automatically hidden from the channel list.
         Usually a value of 60, 1440, 4320 and 10080.
     archive_timestamp: :class:`datetime.datetime`
         An aware timestamp of when the thread's archived status was last updated in UTC.
@@ -394,10 +394,9 @@ class Thread(Messageable, Hashable):
         """Handles permission resolution for the :class:`~discord.Member`
         or :class:`~discord.Role`.
 
-        Since threads do not have their own permissions, they inherit them
-        from the parent channel. This is a convenience method for
-        calling :meth:`~discord.TextChannel.permissions_for` on the
-        parent channel.
+        Since threads do not have their own permissions, they mostly
+        inherit them from the parent channel with some implicit
+        permissions changed.
 
         Parameters
         ----------
@@ -420,7 +419,23 @@ class Thread(Messageable, Hashable):
         parent = self.parent
         if parent is None:
             raise ClientException('Parent channel not found')
-        return parent.permissions_for(obj)
+
+        base = GuildChannel.permissions_for(parent, obj)
+
+        # if you can't send a message in a channel then you can't have certain
+        # permissions as well
+        if not base.send_messages_in_threads:
+            base.send_tts_messages = False
+            base.mention_everyone = False
+            base.embed_links = False
+            base.attach_files = False
+
+        # if you can't read a channel then you have no permissions there
+        if not base.read_messages:
+            denied = Permissions.all_channel()
+            base.value &= ~denied.value
+
+        return base
 
     async def delete_messages(self, messages: Iterable[Snowflake], /, *, reason: Optional[str] = None) -> None:
         """|coro|
@@ -593,7 +608,7 @@ class Thread(Messageable, Hashable):
             Whether non-moderators can add other non-moderators to this thread.
             Only available for private threads.
         auto_archive_duration: :class:`int`
-            The new duration in minutes before a thread is automatically archived for inactivity.
+            The new duration in minutes before a thread is automatically hidden from the channel list.
             Must be one of ``60``, ``1440``, ``4320``, or ``10080``.
         slowmode_delay: :class:`int`
             Specifies the slowmode rate limit for user in this thread, in seconds.

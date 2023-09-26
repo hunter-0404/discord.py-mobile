@@ -983,7 +983,7 @@ In the future this may include :class:`StageChannel` when Discord implements it.
 Removal of ``StoreChannel``
 -----------------------------
 
-Discord's API has removed store channels as of `March 10th, 2022 <https://support-dev.discord.com/hc/en-us/articles/4414590563479>`_. Therefore, the library has removed support for it as well.
+Discord's API has removed store channels as of `March 10th, 2022 <https://support-dev.discord.com/hc/en-us/articles/6309018858647>`_. Therefore, the library has removed support for it as well.
 
 This removes the following:
 
@@ -1006,6 +1006,20 @@ Due to a breaking API change by Discord, :meth:`Guild.bans` no longer returns a 
     async for ban in guild.bans(limit=1000):
         ...
 
+Flag classes now have a custom ``bool()`` implementation
+--------------------------------------------------------
+
+To allow library users to easily check whether an instance of a flag class has any flags enabled,
+using `bool` on them will now only return ``True`` if at least one flag is enabled.
+
+This means that evaluating instances of the following classes in a bool context (such as ``if obj:``) may no longer return ``True``:
+
+- :class:`Intents`
+- :class:`MemberCacheFlags`
+- :class:`MessageFlags`
+- :class:`Permissions`
+- :class:`PublicUserFlags`
+- :class:`SystemChannelFlags`
 
 Function Signature Changes
 ----------------------------
@@ -1267,7 +1281,7 @@ The following changes have been made:
 
 - :meth:`Permissions.stage_moderator` now includes the :attr:`Permissions.manage_channels` permission and the :attr:`Permissions.request_to_speak` permission is no longer included.
 
-- :attr:`File.filename` will no longer be ``None``, in situations where previously this was the case the filename is set to `'untitled'`.
+- :attr:`File.filename` will no longer be ``None``, in situations where previously this was the case the filename is set to ``'untitled'``.
 
 - :attr:`Message.application` will no longer be a raw :class:`dict` of the API payload and now returns an instance of :class:`MessageApplication`.
 

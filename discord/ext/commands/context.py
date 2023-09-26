@@ -24,7 +24,7 @@ DEALINGS IN THE SOFTWARE.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, Dict, Generator, Generic, List, Optional, TypeVar, Union, Sequence, Type
+from typing import TYPE_CHECKING, Any, Dict, Generator, Generic, List, Optional, TypeVar, Union, Sequence, Type, overload
 
 import discord.abc
 import discord.utils
@@ -190,7 +190,7 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         command_failed: bool = False,
         current_parameter: Optional[Parameter] = None,
         current_argument: Optional[str] = None,
-        interaction: Optional[Interaction] = None,
+        interaction: Optional[Interaction[BotT]] = None,
     ):
         self.message: Message = message
         self.bot: BotT = bot
@@ -206,11 +206,11 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         self.command_failed: bool = command_failed
         self.current_parameter: Optional[Parameter] = current_parameter
         self.current_argument: Optional[str] = current_argument
-        self.interaction: Optional[Interaction] = interaction
+        self.interaction: Optional[Interaction[BotT]] = interaction
         self._state: ConnectionState = self.message._state
 
     @classmethod
-    async def from_interaction(cls, interaction: Interaction, /) -> Self:
+    async def from_interaction(cls, interaction: Interaction[BotT], /) -> Self:
         """|coro|
 
         Creates a context from a :class:`discord.Interaction`. This only
@@ -251,7 +251,7 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         if command is None:
             raise ValueError('interaction does not have command data')
 
-        bot: BotT = interaction.client  # type: ignore
+        bot: BotT = interaction.client
         data: ApplicationCommandInteractionData = interaction.data  # type: ignore
         if interaction.message is None:
             synthetic_payload = {
@@ -429,6 +429,14 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         if self.command is None:
             return None
         return self.command.cog
+
+    @property
+    def filesize_limit(self) -> int:
+        """:class:`int`: Returns the maximum number of bytes files can have when uploaded to this guild or DM channel associated with this context.
+
+        .. versionadded:: 2.3
+        """
+        return self.guild.filesize_limit if self.guild is not None else discord.utils.DEFAULT_FILE_SIZE_LIMIT_BYTES
 
     @discord.utils.cached_property
     def guild(self) -> Optional[Guild]:
@@ -615,6 +623,90 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         except CommandError as e:
             await cmd.on_help_command_error(self, e)
 
+    @overload
+    async def reply(
+        self,
+        content: Optional[str] = ...,
+        *,
+        tts: bool = ...,
+        embed: Embed = ...,
+        file: File = ...,
+        stickers: Sequence[Union[GuildSticker, StickerItem]] = ...,
+        delete_after: float = ...,
+        nonce: Union[str, int] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        reference: Union[Message, MessageReference, PartialMessage] = ...,
+        mention_author: bool = ...,
+        view: View = ...,
+        suppress_embeds: bool = ...,
+        ephemeral: bool = ...,
+        silent: bool = ...,
+    ) -> Message:
+        ...
+
+    @overload
+    async def reply(
+        self,
+        content: Optional[str] = ...,
+        *,
+        tts: bool = ...,
+        embed: Embed = ...,
+        files: Sequence[File] = ...,
+        stickers: Sequence[Union[GuildSticker, StickerItem]] = ...,
+        delete_after: float = ...,
+        nonce: Union[str, int] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        reference: Union[Message, MessageReference, PartialMessage] = ...,
+        mention_author: bool = ...,
+        view: View = ...,
+        suppress_embeds: bool = ...,
+        ephemeral: bool = ...,
+        silent: bool = ...,
+    ) -> Message:
+        ...
+
+    @overload
+    async def reply(
+        self,
+        content: Optional[str] = ...,
+        *,
+        tts: bool = ...,
+        embeds: Sequence[Embed] = ...,
+        file: File = ...,
+        stickers: Sequence[Union[GuildSticker, StickerItem]] = ...,
+        delete_after: float = ...,
+        nonce: Union[str, int] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        reference: Union[Message, MessageReference, PartialMessage] = ...,
+        mention_author: bool = ...,
+        view: View = ...,
+        suppress_embeds: bool = ...,
+        ephemeral: bool = ...,
+        silent: bool = ...,
+    ) -> Message:
+        ...
+
+    @overload
+    async def reply(
+        self,
+        content: Optional[str] = ...,
+        *,
+        tts: bool = ...,
+        embeds: Sequence[Embed] = ...,
+        files: Sequence[File] = ...,
+        stickers: Sequence[Union[GuildSticker, StickerItem]] = ...,
+        delete_after: float = ...,
+        nonce: Union[str, int] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        reference: Union[Message, MessageReference, PartialMessage] = ...,
+        mention_author: bool = ...,
+        view: View = ...,
+        suppress_embeds: bool = ...,
+        ephemeral: bool = ...,
+        silent: bool = ...,
+    ) -> Message:
+        ...
+
     async def reply(self, content: Optional[str] = None, **kwargs: Any) -> Message:
         """|coro|
 
@@ -716,6 +808,90 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         if self.interaction:
             await self.interaction.response.defer(ephemeral=ephemeral)
 
+    @overload
+    async def send(
+        self,
+        content: Optional[str] = ...,
+        *,
+        tts: bool = ...,
+        embed: Embed = ...,
+        file: File = ...,
+        stickers: Sequence[Union[GuildSticker, StickerItem]] = ...,
+        delete_after: float = ...,
+        nonce: Union[str, int] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        reference: Union[Message, MessageReference, PartialMessage] = ...,
+        mention_author: bool = ...,
+        view: View = ...,
+        suppress_embeds: bool = ...,
+        ephemeral: bool = ...,
+        silent: bool = ...,
+    ) -> Message:
+        ...
+
+    @overload
+    async def send(
+        self,
+        content: Optional[str] = ...,
+        *,
+        tts: bool = ...,
+        embed: Embed = ...,
+        files: Sequence[File] = ...,
+        stickers: Sequence[Union[GuildSticker, StickerItem]] = ...,
+        delete_after: float = ...,
+        nonce: Union[str, int] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        reference: Union[Message, MessageReference, PartialMessage] = ...,
+        mention_author: bool = ...,
+        view: View = ...,
+        suppress_embeds: bool = ...,
+        ephemeral: bool = ...,
+        silent: bool = ...,
+    ) -> Message:
+        ...
+
+    @overload
+    async def send(
+        self,
+        content: Optional[str] = ...,
+        *,
+        tts: bool = ...,
+        embeds: Sequence[Embed] = ...,
+        file: File = ...,
+        stickers: Sequence[Union[GuildSticker, StickerItem]] = ...,
+        delete_after: float = ...,
+        nonce: Union[str, int] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        reference: Union[Message, MessageReference, PartialMessage] = ...,
+        mention_author: bool = ...,
+        view: View = ...,
+        suppress_embeds: bool = ...,
+        ephemeral: bool = ...,
+        silent: bool = ...,
+    ) -> Message:
+        ...
+
+    @overload
+    async def send(
+        self,
+        content: Optional[str] = ...,
+        *,
+        tts: bool = ...,
+        embeds: Sequence[Embed] = ...,
+        files: Sequence[File] = ...,
+        stickers: Sequence[Union[GuildSticker, StickerItem]] = ...,
+        delete_after: float = ...,
+        nonce: Union[str, int] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        reference: Union[Message, MessageReference, PartialMessage] = ...,
+        mention_author: bool = ...,
+        view: View = ...,
+        suppress_embeds: bool = ...,
+        ephemeral: bool = ...,
+        silent: bool = ...,
+    ) -> Message:
+        ...
+
     async def send(
         self,
         content: Optional[str] = None,
@@ -734,6 +910,7 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         view: Optional[View] = None,
         suppress_embeds: bool = False,
         ephemeral: bool = False,
+        silent: bool = False,
     ) -> Message:
         """|coro|
 
@@ -769,7 +946,7 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         delete_after: :class:`float`
             If provided, the number of seconds to wait in the background
             before deleting the message we just sent. If the deletion fails,
-            then it is silently ignored. This is ignored for interaction based contexts.
+            then it is silently ignored.
         allowed_mentions: :class:`~discord.AllowedMentions`
             Controls the mentions being processed in this message. If this is
             passed, then the object is merged with :attr:`~discord.Client.allowed_mentions`.
@@ -817,6 +994,11 @@ class Context(discord.abc.Messageable, Generic[BotT]):
             is set to 15 minutes. **This is only applicable in contexts with an interaction**.
 
             .. versionadded:: 2.0
+        silent: :class:`bool`
+            Whether to suppress push and desktop notifications for the message. This will increment the mention counter
+            in the UI, but will not actually send a notification.
+
+            .. versionadded:: 2.2
 
         Raises
         --------
@@ -854,6 +1036,7 @@ class Context(discord.abc.Messageable, Generic[BotT]):
                 mention_author=mention_author,
                 view=view,
                 suppress_embeds=suppress_embeds,
+                silent=silent,
             )  # type: ignore # The overloads don't support Optional but the implementation does
 
         # Convert the kwargs from None to MISSING to appease the remaining implementations
@@ -868,6 +1051,7 @@ class Context(discord.abc.Messageable, Generic[BotT]):
             'view': MISSING if view is None else view,
             'suppress_embeds': suppress_embeds,
             'ephemeral': ephemeral,
+            'silent': silent,
         }
 
         if self.interaction.response.is_done():
@@ -876,6 +1060,6 @@ class Context(discord.abc.Messageable, Generic[BotT]):
             await self.interaction.response.send_message(**kwargs)
             msg = await self.interaction.original_response()
 
-        if delete_after is not None and not (ephemeral and self.interaction is not None):
+        if delete_after is not None:
             await msg.delete(delay=delete_after)
         return msg

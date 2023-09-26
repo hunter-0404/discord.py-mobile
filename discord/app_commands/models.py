@@ -445,7 +445,7 @@ class Choice(Generic[ChoiceT]):
     def from_dict(cls, data: ApplicationCommandOptionChoice) -> Choice[ChoiceT]:
         self = cls.__new__(cls)
         self.name = data['name']
-        self.value = data['value']
+        self.value = data['value']  # type: ignore # This seems to break every other pyright release
         self.name_localizations = _to_locale_dict(data.get('name_localizations') or {})
         return self
 
@@ -673,7 +673,7 @@ class AppCommandThread(Hashable):
     archiver_id: Optional[:class:`int`]
         The user's ID that archived this thread.
     auto_archive_duration: :class:`int`
-        The duration in minutes until the thread is automatically archived due to inactivity.
+        The duration in minutes until the thread is automatically hidden from the channel list.
         Usually a value of 60, 1440, 4320 and 10080.
     archive_timestamp: :class:`datetime.datetime`
         An aware timestamp of when the thread's archived status was last updated in UTC.

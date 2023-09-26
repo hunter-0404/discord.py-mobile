@@ -132,11 +132,12 @@ class KeepAliveHandler(threading.Thread):
         shard_id: Optional[int] = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(*args, **kwargs)
+        daemon: bool = kwargs.pop('daemon', True)
+        name: str = kwargs.pop('name', f'keep-alive-handler:shard-{shard_id}')
+        super().__init__(*args, daemon=daemon, name=name, **kwargs)
         self.ws: DiscordWebSocket = ws
         self._main_thread_id: int = ws.thread_id
         self.interval: Optional[float] = interval
-        self.daemon: bool = True
         self.shard_id: Optional[int] = shard_id
         self.msg: str = 'Keeping shard ID %s websocket alive with sequence %s.'
         self.block_msg: str = 'Shard ID %s heartbeat blocked for more than %s seconds.'
@@ -212,7 +213,8 @@ class KeepAliveHandler(threading.Thread):
 
 class VoiceKeepAliveHandler(KeepAliveHandler):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
+        name: str = kwargs.pop('name', f'voice-keep-alive-handler:{id(self):#x}')
+        super().__init__(*args, name=name, **kwargs)
         self.recent_ack_latencies: Deque[float] = deque(maxlen=20)
         self.msg: str = 'Keeping shard ID %s voice websocket alive with timestamp %s.'
         self.block_msg: str = 'Shard ID %s voice heartbeat blocked for more than %s seconds'
@@ -915,6 +917,7 @@ class DiscordVoiceWebSocket:
             'd': {
                 'speaking': int(state),
                 'delay': 0,
+                'ssrc': self._connection.ssrc,
             },
         }
 
@@ -948,16 +951,16 @@ class DiscordVoiceWebSocket:
         state.voice_port = data['port']
         state.endpoint_ip = data['ip']
 
-        packet = bytearray(70)
+        packet = bytearray(74)
         struct.pack_into('>H', packet, 0, 1)  # 1 = Send
         struct.pack_into('>H', packet, 2, 70)  # 70 = Length
         struct.pack_into('>I', packet, 4, state.ssrc)
         state.socket.sendto(packet, (state.endpoint_ip, state.voice_port))
-        recv = await self.loop.sock_recv(state.socket, 70)
+        recv = await self.loop.sock_recv(state.socket, 74)
         _log.debug('received packet in initial_connection: %s', recv)
 
-        # the ip is ascii starting at the 4th byte and ending at the first null
-        ip_start = 4
+        # the ip is ascii starting at the 8th byte and ending at the first null
+        ip_start = 8
         ip_end = recv.index(0, ip_start)
         state.ip = recv[ip_start:ip_end].decode('ascii')
 
@@ -990,7 +993,11 @@ class DiscordVoiceWebSocket:
     async def load_secret_key(self, data: Dict[str, Any]) -> None:
         _log.debug('received secret key for voice connection')
         self.secret_key = self._connection.secret_key = data['secret_key']
-        await self.speak()
+
+        # Send a speak command with the "not speaking" state.
+        # This also tells Discord our SSRC value, which Discord requires
+        # before sending any voice data (and is the real reason why we
+        # call this here).
         await self.speak(SpeakingState.none)
 
     async def poll_event(self) -> None:

@@ -23,24 +23,12 @@ DEALINGS IN THE SOFTWARE.
 """
 
 from __future__ import annotations
+from typing import TypeVar, TYPE_CHECKING
 
-from typing import Literal, TypedDict, List, Optional
+if TYPE_CHECKING:
+    from typing_extensions import TypeVar
+    from .client import Client
 
-from .user import PartialUser
-from .snowflake import Snowflake
-
-
-class TeamMember(TypedDict):
-    user: PartialUser
-    membership_state: int
-    permissions: List[str]
-    team_id: Snowflake
-    role: Literal['admin', 'developer', 'read_only']
-
-
-class Team(TypedDict):
-    id: Snowflake
-    name: str
-    owner_id: Snowflake
-    members: List[TeamMember]
-    icon: Optional[str]
+    ClientT = TypeVar('ClientT', bound=Client, covariant=True, default=Client)
+else:
+    ClientT = TypeVar('ClientT', bound='Client', covariant=True)

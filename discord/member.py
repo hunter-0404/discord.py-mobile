@@ -42,6 +42,7 @@ from .enums import Status, try_enum
 from .errors import ClientException
 from .colour import Colour
 from .object import Object
+from .flags import MemberFlags
 
 __all__ = (
     'VoiceState',
@@ -273,7 +274,7 @@ class Member(discord.abc.Messageable, _UserTag):
 
         .. describe:: str(x)
 
-            Returns the member's name with the discriminator.
+            Returns the member's handle (e.g. ``name`` or ``name#discriminator``).
 
     Attributes
     ----------
@@ -292,7 +293,7 @@ class Member(discord.abc.Messageable, _UserTag):
     guild: :class:`Guild`
         The guild that the member belongs to.
     nick: Optional[:class:`str`]
-        The guild specific nickname of the user.
+        The guild specific nickname of the user. Takes precedence over the global name.
     pending: :class:`bool`
         Whether the member is pending member verification.
 
@@ -321,12 +322,14 @@ class Member(discord.abc.Messageable, _UserTag):
         '_user',
         '_state',
         '_avatar',
+        '_flags',
     )
 
     if TYPE_CHECKING:
         name: str
         id: int
         discriminator: str
+        global_name: Optional[str]
         bot: bool
         system: bool
         created_at: datetime.datetime
@@ -353,6 +356,7 @@ class Member(discord.abc.Messageable, _UserTag):
         self.pending: bool = data.get('pending', False)
         self._avatar: Optional[str] = data.get('avatar')
         self._permissions: Optional[int]
+        self._flags: int = data['flags']
         try:
             self._permissions = int(data['permissions'])
         except KeyError:
@@ -365,7 +369,7 @@ class Member(discord.abc.Messageable, _UserTag):
 
     def __repr__(self) -> str:
         return (
-            f'<Member id={self._user.id} name={self._user.name!r} discriminator={self._user.discriminator!r}'
+            f'<Member id={self._user.id} name={self._user.name!r} global_name={self._user.global_name!r}'
             f' bot={self._user.bot} nick={self.nick!r} guild={self.guild!r}>'
         )
 
@@ -391,6 +395,7 @@ class Member(discord.abc.Messageable, _UserTag):
         self.nick = data.get('nick', None)
         self.pending = data.get('pending', False)
         self.timed_out_until = utils.parse_time(data.get('communication_disabled_until'))
+        self._flags = data.get('flags', 0)
 
     @classmethod
     def _try_upgrade(cls, *, data: UserWithMemberPayload, guild: Guild, state: ConnectionState) -> Union[User, Self]:
@@ -416,6 +421,7 @@ class Member(discord.abc.Messageable, _UserTag):
         self.pending = member.pending
         self.activities = member.activities
         self.timed_out_until = member.timed_out_until
+        self._flags = member._flags
         self._permissions = member._permissions
         self._state = member._state
         self._avatar = member._avatar
@@ -446,6 +452,7 @@ class Member(discord.abc.Messageable, _UserTag):
         self.timed_out_until = utils.parse_time(data.get('communication_disabled_until'))
         self._roles = utils.SnowflakeList(map(int, data['roles']))
         self._avatar = data.get('avatar')
+        self._flags = data.get('flags', 0)
 
     def _presence_update(self, data: PartialPresenceUpdate, user: UserPayload) -> Optional[Tuple[User, User]]:
         self.activities = tuple(create_activity(d, self._state) for d in data['activities'])
@@ -457,12 +464,18 @@ class Member(discord.abc.Messageable, _UserTag):
 
     def _update_inner_user(self, user: UserPayload) -> Optional[Tuple[User, User]]:
         u = self._user
-        original = (u.name, u._avatar, u.discriminator, u._public_flags)
+        original = (u.name, u.discriminator, u._avatar, u.global_name, u._public_flags)
         # These keys seem to always be available
-        modified = (user['username'], user['avatar'], user['discriminator'], user.get('public_flags', 0))
+        modified = (
+            user['username'],
+            user['discriminator'],
+            user['avatar'],
+            user.get('global_name'),
+            user.get('public_flags', 0),
+        )
         if original != modified:
             to_return = User._copy(self._user)
-            u.name, u._avatar, u.discriminator, u._public_flags = modified
+            u.name, u.discriminator, u._avatar, u.global_name, u._public_flags = modified
             # Signal to dispatch on_user_update
             return to_return, u
 
@@ -575,11 +588,11 @@ class Member(discord.abc.Messageable, _UserTag):
     def display_name(self) -> str:
         """:class:`str`: Returns the user's display name.
 
-        For regular users this is just their username, but
-        if they have a guild specific nickname then that
+        For regular users this is just their global name or their username,
+        but if they have a guild specific nickname then that
         is returned instead.
         """
-        return self.nick or self.name
+        return self.nick or self.global_name or self.name
 
     @property
     def display_avatar(self) -> Asset:
@@ -708,6 +721,14 @@ class Member(discord.abc.Messageable, _UserTag):
         """Optional[:class:`VoiceState`]: Returns the member's current voice state."""
         return self.guild._voice_state_for(self._user.id)
 
+    @property
+    def flags(self) -> MemberFlags:
+        """:class:`MemberFlags`: Returns the member's flags.
+
+        .. versionadded:: 2.2
+        """
+        return MemberFlags._from_value(self._flags)
+
     async def ban(
         self,
         *,
@@ -750,6 +771,7 @@ class Member(discord.abc.Messageable, _UserTag):
         roles: Collection[discord.abc.Snowflake] = MISSING,
         voice_channel: Optional[VocalGuildChannel] = MISSING,
         timed_out_until: Optional[datetime.datetime] = MISSING,
+        bypass_verification: bool = MISSING,
         reason: Optional[str] = None,
     ) -> Optional[Member]:
         """|coro|
@@ -758,21 +780,23 @@ class Member(discord.abc.Messageable, _UserTag):
 
         Depending on the parameter passed, this requires different permissions listed below:
 
-        +-----------------+--------------------------------------+
-        |   Parameter     |              Permission              |
-        +-----------------+--------------------------------------+
-        | nick            | :attr:`Permissions.manage_nicknames` |
-        +-----------------+--------------------------------------+
-        | mute            | :attr:`Permissions.mute_members`     |
-        +-----------------+--------------------------------------+
-        | deafen          | :attr:`Permissions.deafen_members`   |
-        +-----------------+--------------------------------------+
-        | roles           | :attr:`Permissions.manage_roles`     |
-        +-----------------+--------------------------------------+
-        | voice_channel   | :attr:`Permissions.move_members`     |
-        +-----------------+--------------------------------------+
-        | timed_out_until | :attr:`Permissions.moderate_members` |
-        +-----------------+--------------------------------------+
+        +---------------------+---------------------------------------+
+        |      Parameter      |              Permission               |
+        +---------------------+---------------------------------------+
+        | nick                | :attr:`Permissions.manage_nicknames`  |
+        +---------------------+---------------------------------------+
+        | mute                | :attr:`Permissions.mute_members`      |
+        +---------------------+---------------------------------------+
+        | deafen              | :attr:`Permissions.deafen_members`    |
+        +---------------------+---------------------------------------+
+        | roles               | :attr:`Permissions.manage_roles`      |
+        +---------------------+---------------------------------------+
+        | voice_channel       | :attr:`Permissions.move_members`      |
+        +---------------------+---------------------------------------+
+        | timed_out_until     | :attr:`Permissions.moderate_members`  |
+        +---------------------+---------------------------------------+
+        | bypass_verification | :attr:`Permissions.moderate_members`  |
+        +---------------------+---------------------------------------+
 
         All parameters are optional.
 
@@ -805,6 +829,10 @@ class Member(discord.abc.Messageable, _UserTag):
             This must be a timezone-aware datetime object. Consider using :func:`utils.utcnow`.
 
             .. versionadded:: 2.0
+        bypass_verification: :class:`bool`
+            Indicates if the member should be allowed to bypass the guild verification requirements.
+
+            .. versionadded:: 2.2
 
         reason: Optional[:class:`str`]
             The reason for editing this member. Shows up on the audit log.
@@ -875,6 +903,11 @@ class Member(discord.abc.Messageable, _UserTag):
                         'timed_out_until must be an aware datetime. Consider using discord.utils.utcnow() or datetime.datetime.now().astimezone() for local time.'
                     )
                 payload['communication_disabled_until'] = timed_out_until.isoformat()
+
+        if bypass_verification is not MISSING:
+            flags = MemberFlags._from_value(self._flags)
+            flags.bypasses_verification = bypass_verification
+            payload['flags'] = flags.value
 
         if payload:
             data = await http.edit_member(guild_id, self.id, reason=reason, **payload)

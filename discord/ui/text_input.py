@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from ..types.components import TextInput as TextInputPayload
     from ..types.interactions import ModalSubmitTextInputInteractionData as ModalSubmitTextInputInteractionDataPayload
     from .view import View
+    from ..interactions import Interaction
 
 
 # fmt: off
@@ -136,9 +137,10 @@ class TextInput(Item[V]):
     @custom_id.setter
     def custom_id(self, value: str) -> None:
         if not isinstance(value, str):
-            raise TypeError('custom_id must be None or str')
+            raise TypeError('custom_id must be a str')
 
         self._underlying.custom_id = value
+        self._provided_custom_id = True
 
     @property
     def width(self) -> int:
@@ -218,7 +220,7 @@ class TextInput(Item[V]):
     def _refresh_component(self, component: TextInputComponent) -> None:
         self._underlying = component
 
-    def _refresh_state(self, data: ModalSubmitTextInputInteractionDataPayload) -> None:
+    def _refresh_state(self, interaction: Interaction, data: ModalSubmitTextInputInteractionDataPayload) -> None:
         self._value = data.get('value', None)
 
     @classmethod
