@@ -39,6 +39,7 @@ from typing import (
     Sequence,
     Tuple,
     TypeVar,
+    TypedDict,
     Union,
     overload,
 )
@@ -47,7 +48,16 @@ import datetime
 import discord.abc
 from .scheduled_event import ScheduledEvent
 from .permissions import PermissionOverwrite, Permissions
-from .enums import ChannelType, ForumLayoutType, ForumOrderType, PrivacyLevel, try_enum, VideoQualityMode, EntityType
+from .enums import (
+    ChannelType,
+    ForumLayoutType,
+    ForumOrderType,
+    PrivacyLevel,
+    try_enum,
+    VideoQualityMode,
+    EntityType,
+    VoiceChannelEffectAnimationType,
+)
 from .mixins import Hashable
 from . import utils
 from .utils import MISSING
@@ -56,8 +66,10 @@ from .errors import ClientException
 from .stage_instance import StageInstance
 from .threads import Thread
 from .partial_emoji import _EmojiTag, PartialEmoji
-from .flags import ChannelFlags
+from .flags import ChannelFlags, MessageFlags
 from .http import handle_message_parameters
+from .object import Object
+from .soundboard import BaseSoundboardSound, SoundboardDefaultSound
 
 __all__ = (
     'TextChannel',
@@ -69,14 +81,15 @@ __all__ = (
     'ForumChannel',
     'GroupChannel',
     'PartialMessageable',
+    'VoiceChannelEffect',
+    'VoiceChannelSoundEffect',
 )
 
 if TYPE_CHECKING:
-    from typing_extensions import Self
+    from typing_extensions import Self, Unpack
 
     from .types.threads import ThreadArchiveDuration
     from .role import Role
-    from .object import Object
     from .member import Member, VoiceState
     from .abc import Snowflake, SnowflakeTime
     from .embeds import Embed
@@ -88,7 +101,7 @@ if TYPE_CHECKING:
     from .file import File
     from .user import ClientUser, User, BaseUser
     from .guild import Guild, GuildChannel as GuildChannelType
-    from .ui.view import View
+    from .ui.view import BaseView, View, LayoutView
     from .types.channel import (
         TextChannel as TextChannelPayload,
         NewsChannel as NewsChannelPayload,
@@ -100,15 +113,171 @@ if TYPE_CHECKING:
         ForumChannel as ForumChannelPayload,
         MediaChannel as MediaChannelPayload,
         ForumTag as ForumTagPayload,
+        VoiceChannelEffect as VoiceChannelEffectPayload,
     )
     from .types.snowflake import SnowflakeList
+    from .types.soundboard import BaseSoundboardSound as BaseSoundboardSoundPayload
+    from .soundboard import SoundboardSound
 
     OverwriteKeyT = TypeVar('OverwriteKeyT', Role, BaseUser, Object, Union[Role, Member, Object])
+
+    class _BaseCreateChannelOptions(TypedDict, total=False):
+        reason: Optional[str]
+        position: int
+
+    class _CreateTextChannelOptions(_BaseCreateChannelOptions, total=False):
+        topic: str
+        slowmode_delay: int
+        nsfw: bool
+        overwrites: Mapping[Union[Role, Member, Object], PermissionOverwrite]
+        default_auto_archive_duration: int
+        default_thread_slowmode_delay: int
+
+    class _CreateVoiceChannelOptions(_BaseCreateChannelOptions, total=False):
+        bitrate: int
+        user_limit: int
+        rtc_region: Optional[str]
+        video_quality_mode: VideoQualityMode
+        overwrites: Mapping[Union[Role, Member, Object], PermissionOverwrite]
+
+    class _CreateStageChannelOptions(_CreateVoiceChannelOptions, total=False):
+        bitrate: int
+        user_limit: int
+        rtc_region: Optional[str]
+        video_quality_mode: VideoQualityMode
+        overwrites: Mapping[Union[Role, Member, Object], PermissionOverwrite]
+
+    class _CreateForumChannelOptions(_CreateTextChannelOptions, total=False):
+        topic: str
+        slowmode_delay: int
+        nsfw: bool
+        overwrites: Mapping[Union[Role, Member, Object], PermissionOverwrite]
+        default_auto_archive_duration: int
+        default_thread_slowmode_delay: int
+        default_sort_order: ForumOrderType
+        default_reaction_emoji: EmojiInputType
+        default_layout: ForumLayoutType
+        available_tags: Sequence[ForumTag]
 
 
 class ThreadWithMessage(NamedTuple):
     thread: Thread
     message: Message
+
+
+class VoiceChannelEffectAnimation(NamedTuple):
+    id: int
+    type: VoiceChannelEffectAnimationType
+
+
+class VoiceChannelSoundEffect(BaseSoundboardSound):
+    """Represents a Discord voice channel sound effect.
+
+    .. versionadded:: 2.5
+
+    .. container:: operations
+
+        .. describe:: x == y
+
+            Checks if two sound effects are equal.
+
+        .. describe:: x != y
+
+            Checks if two sound effects are not equal.
+
+        .. describe:: hash(x)
+
+            Returns the sound effect's hash.
+
+    Attributes
+    ------------
+    id: :class:`int`
+        The ID of the sound.
+    volume: :class:`float`
+        The volume of the sound as floating point percentage (e.g. ``1.0`` for 100%).
+    """
+
+    __slots__ = ('_state',)
+
+    def __init__(self, *, state: ConnectionState, id: int, volume: float):
+        data: BaseSoundboardSoundPayload = {
+            'sound_id': id,
+            'volume': volume,
+        }
+        super().__init__(state=state, data=data)
+
+    def __repr__(self) -> str:
+        return f'<{self.__class__.__name__} id={self.id} volume={self.volume}>'
+
+    @property
+    def created_at(self) -> Optional[datetime.datetime]:
+        """Optional[:class:`datetime.datetime`]: Returns the snowflake's creation time in UTC.
+        Returns ``None`` if it's a default sound."""
+        if self.is_default():
+            return None
+        else:
+            return utils.snowflake_time(self.id)
+
+    def is_default(self) -> bool:
+        """:class:`bool`: Whether it's a default sound or not."""
+        # if it's smaller than the Discord Epoch it cannot be a snowflake
+        return self.id < utils.DISCORD_EPOCH
+
+
+class VoiceChannelEffect:
+    """Represents a Discord voice channel effect.
+
+    .. versionadded:: 2.5
+
+    Attributes
+    ------------
+    channel: :class:`VoiceChannel`
+        The channel in which the effect is sent.
+    user: Optional[:class:`Member`]
+        The user who sent the effect. ``None`` if not found in cache.
+    animation: Optional[:class:`VoiceChannelEffectAnimation`]
+        The animation the effect has. Returns ``None`` if the effect has no animation.
+    emoji: Optional[:class:`PartialEmoji`]
+        The emoji of the effect.
+    sound: Optional[:class:`VoiceChannelSoundEffect`]
+        The sound of the effect. Returns ``None`` if it's an emoji effect.
+    """
+
+    __slots__ = ('channel', 'user', 'animation', 'emoji', 'sound')
+
+    def __init__(self, *, state: ConnectionState, data: VoiceChannelEffectPayload, guild: Guild):
+        self.channel: VoiceChannel = guild.get_channel(int(data['channel_id']))  # type: ignore # will always be a VoiceChannel
+        self.user: Optional[Member] = guild.get_member(int(data['user_id']))
+        self.animation: Optional[VoiceChannelEffectAnimation] = None
+
+        animation_id = data.get('animation_id')
+        if animation_id is not None:
+            animation_type = try_enum(VoiceChannelEffectAnimationType, data['animation_type'])  # type: ignore # cannot be None here
+            self.animation = VoiceChannelEffectAnimation(id=animation_id, type=animation_type)
+
+        emoji = data.get('emoji')
+        self.emoji: Optional[PartialEmoji] = PartialEmoji.from_dict(emoji) if emoji is not None else None
+        self.sound: Optional[VoiceChannelSoundEffect] = None
+
+        sound_id: Optional[int] = utils._get_as_snowflake(data, 'sound_id')
+        if sound_id is not None:
+            sound_volume = data.get('sound_volume') or 0.0
+            self.sound = VoiceChannelSoundEffect(state=state, id=sound_id, volume=sound_volume)
+
+    def __repr__(self) -> str:
+        attrs = [
+            ('channel', self.channel),
+            ('user', self.user),
+            ('animation', self.animation),
+            ('emoji', self.emoji),
+            ('sound', self.sound),
+        ]
+        inner = ' '.join('%s=%r' % t for t in attrs)
+        return f'<{self.__class__.__name__} {inner}>'
+
+    def is_sound(self) -> bool:
+        """:class:`bool`: Whether the effect is a sound or not."""
+        return self.sound is not None
 
 
 class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
@@ -288,12 +457,10 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
         return self._state._get_message(self.last_message_id) if self.last_message_id else None
 
     @overload
-    async def edit(self) -> Optional[TextChannel]:
-        ...
+    async def edit(self) -> Optional[TextChannel]: ...
 
     @overload
-    async def edit(self, *, position: int, reason: Optional[str] = ...) -> None:
-        ...
+    async def edit(self, *, position: int, reason: Optional[str] = ...) -> None: ...
 
     @overload
     async def edit(
@@ -311,8 +478,7 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
         default_thread_slowmode_delay: int = ...,
         type: ChannelType = ...,
         overwrites: Mapping[OverwriteKeyT, PermissionOverwrite] = ...,
-    ) -> TextChannel:
-        ...
+    ) -> TextChannel: ...
 
     async def edit(self, *, reason: Optional[str] = None, **options: Any) -> Optional[TextChannel]:
         """|coro|
@@ -395,9 +561,26 @@ class TextChannel(discord.abc.Messageable, discord.abc.GuildChannel, Hashable):
             return self.__class__(state=self._state, guild=self.guild, data=payload)  # type: ignore
 
     @utils.copy_doc(discord.abc.GuildChannel.clone)
-    async def clone(self, *, name: Optional[str] = None, reason: Optional[str] = None) -> TextChannel:
+    async def clone(
+        self,
+        *,
+        name: Optional[str] = None,
+        category: Optional[CategoryChannel] = None,
+        reason: Optional[str] = None,
+    ) -> TextChannel:
+        base: Dict[Any, Any] = {
+            'topic': self.topic,
+            'nsfw': self.nsfw,
+            'default_auto_archive_duration': self.default_auto_archive_duration,
+            'default_thread_rate_limit_per_user': self.default_thread_slowmode_delay,
+        }
+        if not self.is_news():
+            base['rate_limit_per_user'] = self.slowmode_delay
         return await self._clone_impl(
-            {'topic': self.topic, 'nsfw': self.nsfw, 'rate_limit_per_user': self.slowmode_delay}, name=name, reason=reason
+            base,
+            name=name,
+            category=category,
+            reason=reason,
         )
 
     async def delete_messages(self, messages: Iterable[Snowflake], *, reason: Optional[str] = None) -> None:
@@ -1249,6 +1432,27 @@ class VocalGuildChannel(discord.abc.Messageable, discord.abc.Connectable, discor
         data = await self._state.http.create_webhook(self.id, name=str(name), avatar=avatar, reason=reason)
         return Webhook.from_state(data, state=self._state)
 
+    @utils.copy_doc(discord.abc.GuildChannel.clone)
+    async def clone(
+        self, *, name: Optional[str] = None, category: Optional[CategoryChannel] = None, reason: Optional[str] = None
+    ) -> Self:
+        base = {
+            'bitrate': self.bitrate,
+            'user_limit': self.user_limit,
+            'rate_limit_per_user': self.slowmode_delay,
+            'nsfw': self.nsfw,
+            'video_quality_mode': self.video_quality_mode.value,
+        }
+        if self.rtc_region:
+            base['rtc_region'] = self.rtc_region
+
+        return await self._clone_impl(
+            base,
+            name=name,
+            category=category,
+            reason=reason,
+        )
+
 
 class VoiceChannel(VocalGuildChannel):
     """Represents a Discord guild voice channel.
@@ -1343,17 +1547,11 @@ class VoiceChannel(VocalGuildChannel):
         """:class:`ChannelType`: The channel's Discord type."""
         return ChannelType.voice
 
-    @utils.copy_doc(discord.abc.GuildChannel.clone)
-    async def clone(self, *, name: Optional[str] = None, reason: Optional[str] = None) -> VoiceChannel:
-        return await self._clone_impl({'bitrate': self.bitrate, 'user_limit': self.user_limit}, name=name, reason=reason)
+    @overload
+    async def edit(self) -> None: ...
 
     @overload
-    async def edit(self) -> None:
-        ...
-
-    @overload
-    async def edit(self, *, position: int, reason: Optional[str] = ...) -> None:
-        ...
+    async def edit(self, *, position: int, reason: Optional[str] = ...) -> None: ...
 
     @overload
     async def edit(
@@ -1370,9 +1568,9 @@ class VoiceChannel(VocalGuildChannel):
         rtc_region: Optional[str] = ...,
         video_quality_mode: VideoQualityMode = ...,
         slowmode_delay: int = ...,
+        status: Optional[str] = ...,
         reason: Optional[str] = ...,
-    ) -> VoiceChannel:
-        ...
+    ) -> VoiceChannel: ...
 
     async def edit(self, *, reason: Optional[str] = None, **options: Any) -> Optional[VoiceChannel]:
         """|coro|
@@ -1429,6 +1627,11 @@ class VoiceChannel(VocalGuildChannel):
             The camera video quality for the voice channel's participants.
 
             .. versionadded:: 2.0
+        status: Optional[:class:`str`]
+            The new voice channel status. It can be up to 500 characters.
+            Can be ``None`` to remove the status.
+
+            .. versionadded:: 2.4
 
         Raises
         ------
@@ -1449,6 +1652,35 @@ class VoiceChannel(VocalGuildChannel):
         if payload is not None:
             # the payload will always be the proper channel payload
             return self.__class__(state=self._state, guild=self.guild, data=payload)  # type: ignore
+
+    async def send_sound(self, sound: Union[SoundboardSound, SoundboardDefaultSound], /) -> None:
+        """|coro|
+
+        Sends a soundboard sound for this channel.
+
+        You must have :attr:`~Permissions.speak` and :attr:`~Permissions.use_soundboard` to do this.
+        Additionally, you must have :attr:`~Permissions.use_external_sounds` if the sound is from
+        a different guild.
+
+        .. versionadded:: 2.5
+
+        Parameters
+        -----------
+        sound: Union[:class:`SoundboardSound`, :class:`SoundboardDefaultSound`]
+            The sound to send for this channel.
+
+        Raises
+        -------
+        Forbidden
+            You do not have permissions to send a sound for this channel.
+        HTTPException
+            Sending the sound failed.
+        """
+        payload = {'sound_id': sound.id}
+        if not isinstance(sound, SoundboardDefaultSound) and self.guild.id != sound.guild.id:
+            payload['source_guild_id'] = sound.guild.id
+
+        await self._state.http.send_soundboard_sound(self.id, **payload)
 
 
 class StageChannel(VocalGuildChannel):
@@ -1582,10 +1814,6 @@ class StageChannel(VocalGuildChannel):
         """:class:`ChannelType`: The channel's Discord type."""
         return ChannelType.stage_voice
 
-    @utils.copy_doc(discord.abc.GuildChannel.clone)
-    async def clone(self, *, name: Optional[str] = None, reason: Optional[str] = None) -> StageChannel:
-        return await self._clone_impl({}, name=name, reason=reason)
-
     @property
     def instance(self) -> Optional[StageInstance]:
         """Optional[:class:`StageInstance`]: The running stage instance of the stage channel.
@@ -1600,6 +1828,7 @@ class StageChannel(VocalGuildChannel):
         topic: str,
         privacy_level: PrivacyLevel = MISSING,
         send_start_notification: bool = False,
+        scheduled_event: Snowflake = MISSING,
         reason: Optional[str] = None,
     ) -> StageInstance:
         """|coro|
@@ -1621,6 +1850,10 @@ class StageChannel(VocalGuildChannel):
             You must have :attr:`~Permissions.mention_everyone` to do this.
 
             .. versionadded:: 2.3
+        scheduled_event: :class:`~discord.abc.Snowflake`
+            The guild scheduled event associated with the stage instance.
+
+            .. versionadded:: 2.4
         reason: :class:`str`
             The reason the stage instance was created. Shows up on the audit log.
 
@@ -1646,6 +1879,9 @@ class StageChannel(VocalGuildChannel):
                 raise TypeError('privacy_level field must be of type PrivacyLevel')
 
             payload['privacy_level'] = privacy_level.value
+
+        if scheduled_event is not MISSING:
+            payload['guild_scheduled_event_id'] = scheduled_event.id
 
         payload['send_start_notification'] = send_start_notification
 
@@ -1675,12 +1911,10 @@ class StageChannel(VocalGuildChannel):
         return StageInstance(guild=self.guild, state=self._state, data=data)
 
     @overload
-    async def edit(self) -> None:
-        ...
+    async def edit(self) -> None: ...
 
     @overload
-    async def edit(self, *, position: int, reason: Optional[str] = ...) -> None:
-        ...
+    async def edit(self, *, position: int, reason: Optional[str] = ...) -> None: ...
 
     @overload
     async def edit(
@@ -1688,6 +1922,7 @@ class StageChannel(VocalGuildChannel):
         *,
         name: str = ...,
         nsfw: bool = ...,
+        bitrate: int = ...,
         user_limit: int = ...,
         position: int = ...,
         sync_permissions: int = ...,
@@ -1697,8 +1932,7 @@ class StageChannel(VocalGuildChannel):
         video_quality_mode: VideoQualityMode = ...,
         slowmode_delay: int = ...,
         reason: Optional[str] = ...,
-    ) -> StageChannel:
-        ...
+    ) -> StageChannel: ...
 
     async def edit(self, *, reason: Optional[str] = None, **options: Any) -> Optional[StageChannel]:
         """|coro|
@@ -1724,6 +1958,8 @@ class StageChannel(VocalGuildChannel):
         ----------
         name: :class:`str`
             The new channel's name.
+        bitrate: :class:`int`
+            The new channel's bitrate.
         position: :class:`int`
             The new channel's position.
         nsfw: :class:`bool`
@@ -1852,16 +2088,20 @@ class CategoryChannel(discord.abc.GuildChannel, Hashable):
         return self.nsfw
 
     @utils.copy_doc(discord.abc.GuildChannel.clone)
-    async def clone(self, *, name: Optional[str] = None, reason: Optional[str] = None) -> CategoryChannel:
+    async def clone(
+        self,
+        *,
+        name: Optional[str] = None,
+        category: Optional[CategoryChannel] = None,
+        reason: Optional[str] = None,
+    ) -> CategoryChannel:
         return await self._clone_impl({'nsfw': self.nsfw}, name=name, reason=reason)
 
     @overload
-    async def edit(self) -> None:
-        ...
+    async def edit(self) -> None: ...
 
     @overload
-    async def edit(self, *, position: int, reason: Optional[str] = ...) -> None:
-        ...
+    async def edit(self, *, position: int, reason: Optional[str] = ...) -> None: ...
 
     @overload
     async def edit(
@@ -1872,8 +2112,7 @@ class CategoryChannel(discord.abc.GuildChannel, Hashable):
         nsfw: bool = ...,
         overwrites: Mapping[OverwriteKeyT, PermissionOverwrite] = ...,
         reason: Optional[str] = ...,
-    ) -> CategoryChannel:
-        ...
+    ) -> CategoryChannel: ...
 
     async def edit(self, *, reason: Optional[str] = None, **options: Any) -> Optional[CategoryChannel]:
         """|coro|
@@ -1982,7 +2221,7 @@ class CategoryChannel(discord.abc.GuildChannel, Hashable):
         r.sort(key=lambda c: (c.position, c.id))
         return r
 
-    async def create_text_channel(self, name: str, **options: Any) -> TextChannel:
+    async def create_text_channel(self, name: str, **options: Unpack[_CreateTextChannelOptions]) -> TextChannel:
         """|coro|
 
         A shortcut method to :meth:`Guild.create_text_channel` to create a :class:`TextChannel` in the category.
@@ -1994,7 +2233,7 @@ class CategoryChannel(discord.abc.GuildChannel, Hashable):
         """
         return await self.guild.create_text_channel(name, category=self, **options)
 
-    async def create_voice_channel(self, name: str, **options: Any) -> VoiceChannel:
+    async def create_voice_channel(self, name: str, **options: Unpack[_CreateVoiceChannelOptions]) -> VoiceChannel:
         """|coro|
 
         A shortcut method to :meth:`Guild.create_voice_channel` to create a :class:`VoiceChannel` in the category.
@@ -2006,7 +2245,7 @@ class CategoryChannel(discord.abc.GuildChannel, Hashable):
         """
         return await self.guild.create_voice_channel(name, category=self, **options)
 
-    async def create_stage_channel(self, name: str, **options: Any) -> StageChannel:
+    async def create_stage_channel(self, name: str, **options: Unpack[_CreateStageChannelOptions]) -> StageChannel:
         """|coro|
 
         A shortcut method to :meth:`Guild.create_stage_channel` to create a :class:`StageChannel` in the category.
@@ -2020,7 +2259,7 @@ class CategoryChannel(discord.abc.GuildChannel, Hashable):
         """
         return await self.guild.create_stage_channel(name, category=self, **options)
 
-    async def create_forum(self, name: str, **options: Any) -> ForumChannel:
+    async def create_forum(self, name: str, **options: Unpack[_CreateForumChannelOptions]) -> ForumChannel:
         """|coro|
 
         A shortcut method to :meth:`Guild.create_forum` to create a :class:`ForumChannel` in the category.
@@ -2281,6 +2520,14 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
         return ChannelType.text.value
 
     @property
+    def members(self) -> List[Member]:
+        """List[:class:`Member`]: Returns all members that can see this channel.
+
+        .. versionadded:: 2.5
+        """
+        return [m for m in self.guild.members if self.permissions_for(m).read_messages]
+
+    @property
     def _scheduled_event_entity_type(self) -> Optional[EntityType]:
         return None
 
@@ -2369,18 +2616,40 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
         return self._type == ChannelType.media.value
 
     @utils.copy_doc(discord.abc.GuildChannel.clone)
-    async def clone(self, *, name: Optional[str] = None, reason: Optional[str] = None) -> ForumChannel:
+    async def clone(
+        self,
+        *,
+        name: Optional[str] = None,
+        category: Optional[CategoryChannel],
+        reason: Optional[str] = None,
+    ) -> ForumChannel:
+        base = {
+            'topic': self.topic,
+            'rate_limit_per_user': self.slowmode_delay,
+            'nsfw': self.nsfw,
+            'default_auto_archive_duration': self.default_auto_archive_duration,
+            'available_tags': [tag.to_dict() for tag in self.available_tags],
+            'default_thread_rate_limit_per_user': self.default_thread_slowmode_delay,
+        }
+        if self.default_sort_order:
+            base['default_sort_order'] = self.default_sort_order.value
+        if self.default_reaction_emoji:
+            base['default_reaction_emoji'] = self.default_reaction_emoji._to_forum_tag_payload()
+        if not self.is_media() and self.default_layout:
+            base['default_forum_layout'] = self.default_layout.value
+
         return await self._clone_impl(
-            {'topic': self.topic, 'nsfw': self.nsfw, 'rate_limit_per_user': self.slowmode_delay}, name=name, reason=reason
+            base,
+            name=name,
+            category=category,
+            reason=reason,
         )
 
     @overload
-    async def edit(self) -> None:
-        ...
+    async def edit(self) -> None: ...
 
     @overload
-    async def edit(self, *, position: int, reason: Optional[str] = ...) -> None:
-        ...
+    async def edit(self, *, position: int, reason: Optional[str] = ...) -> None: ...
 
     @overload
     async def edit(
@@ -2403,8 +2672,7 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
         default_layout: ForumLayoutType = ...,
         default_sort_order: ForumOrderType = ...,
         require_tag: bool = ...,
-    ) -> ForumChannel:
-        ...
+    ) -> ForumChannel: ...
 
     async def edit(self, *, reason: Optional[str] = None, **options: Any) -> Optional[ForumChannel]:
         """|coro|
@@ -2597,6 +2865,47 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
 
         return result
 
+    @overload
+    async def create_thread(
+        self,
+        *,
+        name: str,
+        auto_archive_duration: ThreadArchiveDuration = ...,
+        slowmode_delay: Optional[int] = ...,
+        file: File = ...,
+        files: Sequence[File] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        mention_author: bool = ...,
+        applied_tags: Sequence[ForumTag] = ...,
+        view: LayoutView,
+        suppress_embeds: bool = ...,
+        silent: bool = ...,
+        reason: Optional[str] = ...,
+    ) -> ThreadWithMessage: ...
+
+    @overload
+    async def create_thread(
+        self,
+        *,
+        name: str,
+        auto_archive_duration: ThreadArchiveDuration = ...,
+        slowmode_delay: Optional[int] = ...,
+        content: Optional[str] = ...,
+        tts: bool = ...,
+        embed: Embed = ...,
+        embeds: Sequence[Embed] = ...,
+        file: File = ...,
+        files: Sequence[File] = ...,
+        stickers: Sequence[Union[GuildSticker, StickerItem]] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        mention_author: bool = ...,
+        applied_tags: Sequence[ForumTag] = ...,
+        view: View = ...,
+        suppress_embeds: bool = ...,
+        silent: bool = ...,
+        reason: Optional[str] = ...,
+    ) -> ThreadWithMessage: ...
+
     async def create_thread(
         self,
         *,
@@ -2613,8 +2922,9 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
         allowed_mentions: AllowedMentions = MISSING,
         mention_author: bool = MISSING,
         applied_tags: Sequence[ForumTag] = MISSING,
-        view: View = MISSING,
+        view: BaseView = MISSING,
         suppress_embeds: bool = False,
+        silent: bool = False,
         reason: Optional[str] = None,
     ) -> ThreadWithMessage:
         """|coro|
@@ -2663,12 +2973,17 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
             If set, overrides the :attr:`~discord.AllowedMentions.replied_user` attribute of ``allowed_mentions``.
         applied_tags: List[:class:`discord.ForumTag`]
             A list of tags to apply to the thread.
-        view: :class:`discord.ui.View`
+        view: Union[:class:`discord.ui.View`, :class:`discord.ui.LayoutView`]
             A Discord UI View to add to the message.
         stickers: Sequence[Union[:class:`~discord.GuildSticker`, :class:`~discord.StickerItem`]]
             A list of stickers to upload. Must be a maximum of 3.
         suppress_embeds: :class:`bool`
             Whether to suppress embeds for the message. This sends the message without any embeds if set to ``True``.
+        silent: :class:`bool`
+            Whether to suppress push and desktop notifications for the message. This will increment the mention counter
+            in the UI, but will not actually send a notification.
+
+            .. versionadded:: 2.7
         reason: :class:`str`
             The reason for creating a new thread. Shows up on the audit log.
 
@@ -2701,10 +3016,10 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
         if view and not hasattr(view, '__discord_ui_view__'):
             raise TypeError(f'view parameter must be View not {view.__class__.__name__}')
 
-        if suppress_embeds:
-            from .message import MessageFlags  # circular import
-
-            flags = MessageFlags._from_value(4)
+        if suppress_embeds or silent:
+            flags = MessageFlags._from_value(0)
+            flags.suppress_embeds = suppress_embeds
+            flags.suppress_notifications = silent
         else:
             flags = MISSING
 
@@ -2741,7 +3056,7 @@ class ForumChannel(discord.abc.GuildChannel, Hashable):
             data = await state.http.start_thread_in_forum(self.id, params=params, reason=reason)
             thread = Thread(guild=self.guild, state=self._state, data=data)
             message = Message(state=self._state, channel=thread, data=data['message'])
-            if view and not view.is_finished():
+            if view and not view.is_finished() and view.is_dispatchable():
                 self._state.store_view(view, message.id)
 
             return ThreadWithMessage(thread=thread, message=message)
@@ -2902,22 +3217,21 @@ class DMChannel(discord.abc.Messageable, discord.abc.PrivateChannel, Hashable):
         The user you are participating with in the direct message channel.
         If this channel is received through the gateway, the recipient information
         may not be always available.
+    recipients: List[:class:`User`]
+        The users you are participating with in the DM channel.
+
+        .. versionadded:: 2.4
     me: :class:`ClientUser`
         The user presenting yourself.
     id: :class:`int`
         The direct message channel ID.
     """
 
-    __slots__ = ('id', 'recipient', 'me', '_state')
+    __slots__ = ('id', 'recipients', 'me', '_state')
 
     def __init__(self, *, me: ClientUser, state: ConnectionState, data: DMChannelPayload):
         self._state: ConnectionState = state
-        self.recipient: Optional[User] = None
-
-        recipients = data.get('recipients')
-        if recipients is not None:
-            self.recipient = state.store_user(recipients[0])
-
+        self.recipients: List[User] = [state.store_user(u) for u in data.get('recipients', [])]
         self.me: ClientUser = me
         self.id: int = int(data['id'])
 
@@ -2937,10 +3251,16 @@ class DMChannel(discord.abc.Messageable, discord.abc.PrivateChannel, Hashable):
         self = cls.__new__(cls)
         self._state = state
         self.id = channel_id
-        self.recipient = None
+        self.recipients = []
         # state.user won't be None here
         self.me = state.user  # type: ignore
         return self
+
+    @property
+    def recipient(self) -> Optional[User]:
+        if self.recipients:
+            return self.recipients[0]
+        return None
 
     @property
     def type(self) -> Literal[ChannelType.private]:
@@ -3289,6 +3609,14 @@ class PartialMessageable(discord.abc.Messageable, Hashable):
         """
 
         return Permissions.none()
+
+    @property
+    def mention(self) -> str:
+        """:class:`str`: Returns a string that allows you to mention the channel.
+
+        .. versionadded:: 2.5
+        """
+        return f'<#{self.id}>'
 
     def get_partial_message(self, message_id: int, /) -> PartialMessage:
         """Creates a :class:`PartialMessage` from the message ID.

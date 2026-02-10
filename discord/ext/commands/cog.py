@@ -21,6 +21,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -46,7 +47,7 @@ from typing import (
     Union,
 )
 
-from ._types import _BaseCommand, BotT
+from ._types import _BaseCommand, BotT, MaybeCoro
 
 if TYPE_CHECKING:
     from typing_extensions import Self
@@ -56,6 +57,7 @@ if TYPE_CHECKING:
     from .bot import BotBase
     from .context import Context
     from .core import Command
+
 
 __all__ = (
     'CogMeta',
@@ -169,7 +171,7 @@ class CogMeta(type):
     __cog_app_commands__: List[Union[app_commands.Group, app_commands.Command[Any, ..., Any]]]
     __cog_listeners__: List[Tuple[str, str]]
 
-    def __new__(cls, *args: Any, **kwargs: Any) -> Self:
+    def __new__(cls, *args: Any, **kwargs: Any) -> CogMeta:
         name, bases, attrs = args
         if any(issubclass(base, app_commands.Group) for base in bases):
             raise TypeError(
@@ -318,6 +320,8 @@ class Cog(metaclass=CogMeta):
                 parent=None,
                 guild_ids=getattr(cls, '__discord_app_commands_default_guilds__', None),
                 guild_only=getattr(cls, '__discord_app_commands_guild_only__', False),
+                allowed_contexts=getattr(cls, '__discord_app_commands_contexts__', None),
+                allowed_installs=getattr(cls, '__discord_app_commands_installation_types__', None),
                 default_permissions=getattr(cls, '__discord_app_commands_default_permissions__', None),
                 extras=cls.__cog_group_extras__,
             )
@@ -362,9 +366,11 @@ class Cog(metaclass=CogMeta):
                     if isinstance(app_command, app_commands.Group):
                         for child in app_command.walk_commands():
                             app_command_refs[child.qualified_name] = child
+                            if hasattr(child, '__commands_is_hybrid_app_command__') and child.qualified_name in lookup:
+                                child.wrapped = lookup[child.qualified_name]  # type: ignore
 
                     if self.__cog_app_commands_group__:
-                        children.append(app_command)  # type: ignore # Somehow it thinks it can be None here
+                        children.append(app_command)
 
         if Cog._get_overridden_method(self.cog_app_command_error) is not None:
             error_handler = self.cog_app_command_error
@@ -577,7 +583,7 @@ class Cog(metaclass=CogMeta):
         pass
 
     @_cog_special_method
-    def bot_check_once(self, ctx: Context[BotT]) -> bool:
+    def bot_check_once(self, ctx: Context[BotT]) -> MaybeCoro[bool]:
         """A special method that registers as a :meth:`.Bot.check_once`
         check.
 
@@ -587,7 +593,7 @@ class Cog(metaclass=CogMeta):
         return True
 
     @_cog_special_method
-    def bot_check(self, ctx: Context[BotT]) -> bool:
+    def bot_check(self, ctx: Context[BotT]) -> MaybeCoro[bool]:
         """A special method that registers as a :meth:`.Bot.check`
         check.
 
@@ -597,7 +603,7 @@ class Cog(metaclass=CogMeta):
         return True
 
     @_cog_special_method
-    def cog_check(self, ctx: Context[BotT]) -> bool:
+    def cog_check(self, ctx: Context[BotT]) -> MaybeCoro[bool]:
         """A special method that registers as a :func:`~discord.ext.commands.check`
         for every command and subcommand in this cog.
 
@@ -607,7 +613,7 @@ class Cog(metaclass=CogMeta):
         return True
 
     @_cog_special_method
-    def interaction_check(self, interaction: discord.Interaction[ClientT], /) -> bool:
+    def interaction_check(self, interaction: discord.Interaction[ClientT], /) -> MaybeCoro[bool]:
         """A special method that registers as a :func:`discord.app_commands.check`
         for every app command and subcommand in this cog.
 

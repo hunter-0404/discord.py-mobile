@@ -35,6 +35,7 @@ from .user import PartialUser
 from .appinfo import PartialAppInfo
 
 InviteTargetType = Literal[1, 2]
+InviteType = Literal[0, 1, 2]
 
 
 class _InviteMetadata(TypedDict, total=False):
@@ -43,7 +44,6 @@ class _InviteMetadata(TypedDict, total=False):
     max_age: int
     temporary: bool
     created_at: str
-    expires_at: Optional[str]
 
 
 class VanityInvite(_InviteMetadata):
@@ -63,16 +63,19 @@ class Invite(IncompleteInvite, total=False):
     target_type: InviteTargetType
     target_application: PartialAppInfo
     guild_scheduled_event: GuildScheduledEvent
+    type: InviteType
+    flags: NotRequired[int]
+    expires_at: Optional[str]
 
 
-class InviteWithCounts(Invite, _GuildPreviewUnique):
-    ...
+class InviteWithCounts(Invite, _GuildPreviewUnique): ...
 
 
 class GatewayInviteCreate(TypedDict):
     channel_id: Snowflake
     code: str
     created_at: str
+    expires_at: Optional[str]
     max_age: int
     max_uses: int
     temporary: bool
@@ -82,6 +85,7 @@ class GatewayInviteCreate(TypedDict):
     target_type: NotRequired[InviteTargetType]
     target_user: NotRequired[PartialUser]
     target_application: NotRequired[PartialAppInfo]
+    flags: NotRequired[int]
 
 
 class GatewayInviteDelete(TypedDict):

@@ -33,8 +33,7 @@ AutoModerationRuleEventType = Literal[1]
 AutoModerationTriggerPresets = Literal[1, 2, 3]
 
 
-class Empty(TypedDict):
-    ...
+class Empty(TypedDict): ...
 
 
 class _AutoModerationActionMetadataAlert(TypedDict):
@@ -79,6 +78,7 @@ class _AutoModerationTriggerMetadataKeywordPreset(TypedDict):
 
 class _AutoModerationTriggerMetadataMentionLimit(TypedDict):
     mention_total_limit: int
+    mention_raid_protection_enabled: bool
 
 
 AutoModerationTriggerMetadata = Union[

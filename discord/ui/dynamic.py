@@ -38,14 +38,12 @@ if TYPE_CHECKING:
     from ..interactions import Interaction
     from ..components import Component
     from ..enums import ComponentType
-    from .view import View
-
-    V = TypeVar('V', bound='View', covariant=True, default=View)
+    from .view import View, LayoutView
 else:
-    V = TypeVar('V', bound='View', covariant=True)
+    View = LayoutView = Any
 
 
-class DynamicItem(Generic[BaseT], Item['View']):
+class DynamicItem(Generic[BaseT], Item[Union[View, LayoutView]]):
     """Represents an item with a dynamic ``custom_id`` that can be used to store state within
     that ``custom_id``.
 
@@ -57,9 +55,10 @@ class DynamicItem(Generic[BaseT], Item['View']):
     and should not be used long term. Their only purpose is to act as a "template"
     for the actual dispatched item.
 
-    When this item is generated, :attr:`view` is set to a regular :class:`View` instance
-    from the original message given from the interaction. This means that custom view
-    subclasses cannot be accessed from this item.
+    When this item is generated, :attr:`view` is set to a regular :class:`View` instance,
+    but to a :class:`LayoutView` if the component was sent with one, this is obtained from
+    the original message given from the interaction. This means that custom view subclasses
+    cannot be accessed from this item.
 
     .. versionadded:: 2.4
 
@@ -104,7 +103,8 @@ class DynamicItem(Generic[BaseT], Item['View']):
     ) -> None:
         super().__init__()
         self.item: BaseT = item
-        self.row = row
+        if row is not None:
+            self.row = row
 
         if not self.item.is_dispatchable():
             raise TypeError('item must be dispatchable, e.g. not a URL button')
@@ -168,6 +168,10 @@ class DynamicItem(Generic[BaseT], Item['View']):
     def width(self) -> int:
         return self.item.width
 
+    @property
+    def _total_count(self) -> int:
+        return self.item._total_count
+
     @classmethod
     async def from_custom_id(
         cls: Type[Self], interaction: Interaction[ClientT], item: Item[Any], match: re.Match[str], /
@@ -207,3 +211,9 @@ class DynamicItem(Generic[BaseT], Item['View']):
             from the ``match`` object.
         """
         raise NotImplementedError
+
+    async def callback(self, interaction: Interaction[ClientT]) -> Any:
+        return await self.item.callback(interaction)
+
+    async def interaction_check(self, interaction: Interaction[ClientT], /) -> bool:
+        return await self.item.interaction_check(interaction)

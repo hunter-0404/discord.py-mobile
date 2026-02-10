@@ -37,6 +37,7 @@ from .member import Member
 from .emoji import Emoji
 from .user import User
 from .threads import Thread
+from .soundboard import SoundboardSound
 
 
 class Ban(TypedDict):
@@ -47,6 +48,11 @@ class Ban(TypedDict):
 class UnavailableGuild(TypedDict):
     id: Snowflake
     unavailable: NotRequired[bool]
+
+
+class IncidentData(TypedDict):
+    invites_disabled_until: NotRequired[Optional[str]]
+    dms_disabled_until: NotRequired[Optional[str]]
 
 
 DefaultMessageNotificationLevel = Literal[0, 1]
@@ -84,7 +90,12 @@ GuildFeature = Literal[
     'VERIFIED',
     'VIP_REGIONS',
     'WELCOME_SCREEN_ENABLED',
+    'ENHANCED_ROLE_COLORS',
     'RAID_ALERTS_DISABLED',
+    'SOUNDBOARD',
+    'MORE_SOUNDBOARD',
+    'GUESTS_ENABLED',
+    'GUILD_TAGS',
 ]
 
 
@@ -97,6 +108,7 @@ class _BaseGuildPreview(UnavailableGuild):
     stickers: List[GuildSticker]
     features: List[GuildFeature]
     description: Optional[str]
+    incidents_data: Optional[IncidentData]
 
 
 class _GuildPreviewUnique(TypedDict):
@@ -104,8 +116,7 @@ class _GuildPreviewUnique(TypedDict):
     approximate_presence_count: int
 
 
-class GuildPreview(_BaseGuildPreview, _GuildPreviewUnique):
-    ...
+class GuildPreview(_BaseGuildPreview, _GuildPreviewUnique): ...
 
 
 class Guild(_BaseGuildPreview):
@@ -148,14 +159,14 @@ class Guild(_BaseGuildPreview):
     max_members: NotRequired[int]
     premium_subscription_count: NotRequired[int]
     max_video_channel_users: NotRequired[int]
+    soundboard_sounds: NotRequired[List[SoundboardSound]]
 
 
 class InviteGuild(Guild, total=False):
     welcome_screen: WelcomeScreen
 
 
-class GuildWithCounts(Guild, _GuildPreviewUnique):
-    ...
+class GuildWithCounts(Guild, _GuildPreviewUnique): ...
 
 
 class GuildPrune(TypedDict):
@@ -169,8 +180,8 @@ class GuildMFALevel(TypedDict):
 class ChannelPositionUpdate(TypedDict):
     id: Snowflake
     position: Optional[int]
-    lock_permissions: Optional[bool]
-    parent_id: Optional[Snowflake]
+    lock_permissions: NotRequired[Optional[bool]]
+    parent_id: NotRequired[Optional[Snowflake]]
 
 
 class _RolePositionRequired(TypedDict):
@@ -179,3 +190,8 @@ class _RolePositionRequired(TypedDict):
 
 class RolePositionUpdate(_RolePositionRequired, total=False):
     position: Optional[Snowflake]
+
+
+class BulkBanUserResponse(TypedDict):
+    banned_users: Optional[List[Snowflake]]
+    failed_users: Optional[List[Snowflake]]

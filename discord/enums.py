@@ -21,6 +21,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 """
+
 from __future__ import annotations
 
 import types
@@ -69,23 +70,37 @@ __all__ = (
     'AutoModRuleActionType',
     'ForumLayoutType',
     'ForumOrderType',
+    'SelectDefaultValueType',
+    'SKUType',
+    'EntitlementType',
+    'EntitlementOwnerType',
+    'PollLayoutType',
+    'InviteType',
+    'ReactionType',
+    'VoiceChannelEffectAnimationType',
+    'SubscriptionStatus',
+    'MessageReferenceType',
+    'StatusDisplayType',
+    'OnboardingPromptType',
+    'OnboardingMode',
+    'SeparatorSpacing',
+    'MediaItemLoadingState',
+    'CollectibleType',
+    'NameplatePalette',
 )
-
-if TYPE_CHECKING:
-    from typing_extensions import Self
 
 
 def _create_value_cls(name: str, comparable: bool):
     # All the type ignores here are due to the type checker being unable to recognise
     # Runtime type creation without exploding.
     cls = namedtuple('_EnumValue_' + name, 'name value')
-    cls.__repr__ = lambda self: f'<{name}.{self.name}: {self.value!r}>'  # type: ignore
-    cls.__str__ = lambda self: f'{name}.{self.name}'  # type: ignore
+    cls.__repr__ = lambda self: f'<{name}.{self.name}: {self.value!r}>'
+    cls.__str__ = lambda self: f'{name}.{self.name}'
     if comparable:
-        cls.__le__ = lambda self, other: isinstance(other, self.__class__) and self.value <= other.value  # type: ignore
-        cls.__ge__ = lambda self, other: isinstance(other, self.__class__) and self.value >= other.value  # type: ignore
-        cls.__lt__ = lambda self, other: isinstance(other, self.__class__) and self.value < other.value  # type: ignore
-        cls.__gt__ = lambda self, other: isinstance(other, self.__class__) and self.value > other.value  # type: ignore
+        cls.__le__ = lambda self, other: isinstance(other, self.__class__) and self.value <= other.value
+        cls.__ge__ = lambda self, other: isinstance(other, self.__class__) and self.value >= other.value
+        cls.__lt__ = lambda self, other: isinstance(other, self.__class__) and self.value < other.value
+        cls.__gt__ = lambda self, other: isinstance(other, self.__class__) and self.value > other.value
     return cls
 
 
@@ -100,7 +115,14 @@ class EnumMeta(type):
         _enum_member_map_: ClassVar[Dict[str, Any]]
         _enum_value_map_: ClassVar[Dict[Any, Any]]
 
-    def __new__(cls, name: str, bases: Tuple[type, ...], attrs: Dict[str, Any], *, comparable: bool = False) -> Self:
+    def __new__(
+        cls,
+        name: str,
+        bases: Tuple[type, ...],
+        attrs: Dict[str, Any],
+        *,
+        comparable: bool = False,
+    ) -> EnumMeta:
         value_mapping = {}
         member_mapping = {}
         member_names = []
@@ -158,7 +180,7 @@ class EnumMeta(type):
         try:
             return cls._enum_value_map_[value]
         except (KeyError, TypeError):
-            raise ValueError(f"{value!r} is not a valid {cls.__name__}")
+            raise ValueError(f'{value!r} is not a valid {cls.__name__}')
 
     def __getitem__(cls, key: str) -> Any:
         return cls._enum_member_map_[key]
@@ -209,6 +231,12 @@ class ChannelType(Enum):
         return self.name
 
 
+class MessageReferenceType(Enum):
+    default = 0
+    reply = 0
+    forward = 1
+
+
 class MessageType(Enum):
     default = 0
     recipient_add = 1
@@ -243,6 +271,23 @@ class MessageType(Enum):
     stage_raise_hand = 30
     stage_topic = 31
     guild_application_premium_subscription = 32
+    guild_incident_alert_mode_enabled = 36
+    guild_incident_alert_mode_disabled = 37
+    guild_incident_report_raid = 38
+    guild_incident_report_false_alarm = 39
+    purchase_notification = 44
+    poll_result = 46
+    emoji_added = 63
+
+    def is_deletable(self) -> bool:
+        return self not in {
+            MessageType.recipient_add,
+            MessageType.recipient_remove,
+            MessageType.call,
+            MessageType.channel_name_change,
+            MessageType.channel_icon_change,
+            MessageType.thread_starter_message,
+        }
 
 
 class SpeakingState(Enum):
@@ -364,14 +409,25 @@ class AuditLogAction(Enum):
     thread_update                                     = 111
     thread_delete                                     = 112
     app_command_permission_update                     = 121
+    soundboard_sound_create                           = 130
+    soundboard_sound_update                           = 131
+    soundboard_sound_delete                           = 132
     automod_rule_create                               = 140
     automod_rule_update                               = 141
     automod_rule_delete                               = 142
     automod_block_message                             = 143
     automod_flag_message                              = 144
     automod_timeout_member                            = 145
+    automod_quarantine_user                           = 146
     creator_monetization_request_created              = 150
     creator_monetization_terms_accepted               = 151
+    onboarding_prompt_create                          = 163
+    onboarding_prompt_update                          = 164
+    onboarding_prompt_delete                          = 165
+    onboarding_create                                 = 166
+    onboarding_update                                 = 167
+    home_settings_create                              = 190
+    home_settings_update                              = 191
     # fmt: on
 
     @property
@@ -432,11 +488,22 @@ class AuditLogAction(Enum):
             AuditLogAction.automod_block_message:                    None,
             AuditLogAction.automod_flag_message:                     None,
             AuditLogAction.automod_timeout_member:                   None,
+            AuditLogAction.automod_quarantine_user:                  None,
             AuditLogAction.creator_monetization_request_created:     None,
             AuditLogAction.creator_monetization_terms_accepted:      None,
+            AuditLogAction.soundboard_sound_create:                  AuditLogActionCategory.create,
+            AuditLogAction.soundboard_sound_update:                  AuditLogActionCategory.update,
+            AuditLogAction.soundboard_sound_delete:                  AuditLogActionCategory.delete,
+            AuditLogAction.onboarding_prompt_create:                 AuditLogActionCategory.create,
+            AuditLogAction.onboarding_prompt_update:                 AuditLogActionCategory.update,
+            AuditLogAction.onboarding_prompt_delete:                 AuditLogActionCategory.delete,
+            AuditLogAction.onboarding_create:                        AuditLogActionCategory.create,
+            AuditLogAction.onboarding_update:                        AuditLogActionCategory.update,
+            AuditLogAction.home_settings_create:                     AuditLogActionCategory.create,
+            AuditLogAction.home_settings_update:                     AuditLogActionCategory.update,
         }
         # fmt: on
-        return lookup[self]
+        return lookup.get(self, None)
 
     @property
     def target_type(self) -> Optional[str]:
@@ -473,12 +540,18 @@ class AuditLogAction(Enum):
             return 'thread'
         elif v < 122:
             return 'integration_or_app_command'
-        elif v < 143:
+        elif 139 < v < 143:
             return 'auto_moderation'
-        elif v < 146:
+        elif v < 147:
             return 'user'
         elif v < 152:
             return 'creator_monetization'
+        elif v < 166:
+            return 'onboarding_prompt'
+        elif v < 168:
+            return 'onboarding'
+        elif v < 192:
+            return 'home_settings'
 
 
 class UserFlags(Enum):
@@ -590,6 +663,8 @@ class InteractionResponseType(Enum):
     message_update = 7  # for components
     autocomplete_result = 8
     modal = 9  # for modals
+    # premium_required = 10 (deprecated)
+    launch_activity = 12
 
 
 class VideoQualityMode(Enum):
@@ -610,6 +685,15 @@ class ComponentType(Enum):
     role_select = 6
     mentionable_select = 7
     channel_select = 8
+    section = 9
+    text_display = 10
+    thumbnail = 11
+    media_gallery = 12
+    file = 13
+    separator = 14
+    container = 17
+    label = 18
+    file_upload = 19
 
     def __int__(self) -> int:
         return self.value
@@ -621,6 +705,7 @@ class ButtonStyle(Enum):
     success = 3
     danger = 4
     link = 5
+    premium = 6
 
     # Aliases
     blurple = 1
@@ -661,6 +746,42 @@ class MFALevel(Enum, comparable=True):
     require_2fa = 1
 
 
+_UNICODE_LANG_MAP: Dict[str, str] = {
+    'bg': 'bg-BG',
+    'zh-CN': 'zh-CN',
+    'zh-TW': 'zh-TW',
+    'hr': 'hr-HR',
+    'cs': 'cs-CZ',
+    'da': 'da-DK',
+    'nl': 'nl-NL',
+    'en-US': 'en-US',
+    'en-GB': 'en-GB',
+    'fi': 'fi-FI',
+    'fr': 'fr-FR',
+    'de': 'de-DE',
+    'el': 'el-GR',
+    'hi': 'hi-IN',
+    'hu': 'hu-HU',
+    'id': 'id-ID',
+    'it': 'it-IT',
+    'ja': 'ja-JP',
+    'ko': 'ko-KR',
+    'lt': 'lt-LT',
+    'no': 'no-NO',
+    'pl': 'pl-PL',
+    'pt-BR': 'pt-BR',
+    'ro': 'ro-RO',
+    'ru': 'ru-RU',
+    'es-ES': 'es-ES',
+    'es-419': 'es-419',
+    'sv-SE': 'sv-SE',
+    'th': 'th-TH',
+    'tr': 'tr-TR',
+    'uk': 'uk-UA',
+    'vi': 'vi-VN',
+}
+
+
 class Locale(Enum):
     american_english = 'en-US'
     british_english = 'en-GB'
@@ -681,6 +802,7 @@ class Locale(Enum):
     italian = 'it'
     japanese = 'ja'
     korean = 'ko'
+    latin_american_spanish = 'es-419'
     lithuanian = 'lt'
     norwegian = 'no'
     polish = 'pl'
@@ -696,6 +818,10 @@ class Locale(Enum):
 
     def __str__(self) -> str:
         return self.value
+
+    @property
+    def language_code(self) -> str:
+        return _UNICODE_LANG_MAP.get(self.value, self.value)
 
 
 E = TypeVar('E', bound='Enum')
@@ -749,16 +875,19 @@ class AutoModRuleTriggerType(Enum):
     spam = 3
     keyword_preset = 4
     mention_spam = 5
+    member_profile = 6
 
 
 class AutoModRuleEventType(Enum):
     message_send = 1
+    member_update = 2
 
 
 class AutoModRuleActionType(Enum):
     block_message = 1
     send_alert_message = 2
     timeout = 3
+    block_member_interactions = 4
 
 
 class ForumLayoutType(Enum):
@@ -770,6 +899,107 @@ class ForumLayoutType(Enum):
 class ForumOrderType(Enum):
     latest_activity = 0
     creation_date = 1
+
+
+class SelectDefaultValueType(Enum):
+    user = 'user'
+    role = 'role'
+    channel = 'channel'
+
+
+class SKUType(Enum):
+    durable = 2
+    consumable = 3
+    subscription = 5
+    subscription_group = 6
+
+
+class EntitlementType(Enum):
+    purchase = 1
+    premium_subscription = 2
+    developer_gift = 3
+    test_mode_purchase = 4
+    free_purchase = 5
+    user_gift = 6
+    premium_purchase = 7
+    application_subscription = 8
+
+
+class EntitlementOwnerType(Enum):
+    guild = 1
+    user = 2
+
+
+class PollLayoutType(Enum):
+    default = 1
+
+
+class InviteType(Enum):
+    guild = 0
+    group_dm = 1
+    friend = 2
+
+
+class ReactionType(Enum):
+    normal = 0
+    burst = 1
+
+
+class VoiceChannelEffectAnimationType(Enum):
+    premium = 0
+    basic = 1
+
+
+class SubscriptionStatus(Enum):
+    active = 0
+    ending = 1
+    inactive = 2
+
+
+class StatusDisplayType(Enum):
+    name = 0  # pyright: ignore[reportAssignmentType]
+    state = 1
+    details = 2
+
+
+class OnboardingPromptType(Enum):
+    multiple_choice = 0
+    dropdown = 1
+
+
+class OnboardingMode(Enum):
+    default = 0
+    advanced = 1
+
+
+class SeparatorSpacing(Enum):
+    small = 1
+    large = 2
+
+
+class MediaItemLoadingState(Enum):
+    unknown = 0
+    loading = 1
+    loaded = 2
+    not_found = 3
+
+
+class CollectibleType(Enum):
+    nameplate = 'nameplate'
+
+
+class NameplatePalette(Enum):
+    crimson = 'crimson'
+    berry = 'berry'
+    sky = 'sky'
+    teal = 'teal'
+    forest = 'forest'
+    bubble_gum = 'bubble_gum'
+    violet = 'violet'
+    cobalt = 'cobalt'
+    clover = 'clover'
+    lemon = 'lemon'
+    white = 'white'
 
 
 def create_unknown_value(cls: Type[E], val: Any) -> E:

@@ -50,8 +50,8 @@ if TYPE_CHECKING:
     ValidStaticFormatTypes = Literal['webp', 'jpeg', 'jpg', 'png']
     ValidAssetFormatTypes = Literal['webp', 'jpeg', 'jpg', 'png', 'gif']
 
-VALID_STATIC_FORMATS = frozenset({"jpeg", "jpg", "webp", "png"})
-VALID_ASSET_FORMATS = VALID_STATIC_FORMATS | {"gif"}
+VALID_STATIC_FORMATS = frozenset({'jpeg', 'jpg', 'webp', 'png'})
+VALID_ASSET_FORMATS = VALID_STATIC_FORMATS | {'gif'}
 
 
 MISSING = utils.MISSING
@@ -241,9 +241,29 @@ class Asset(AssetMixin):
         format = 'gif' if animated else 'png'
         return cls(
             state,
-            url=f"{cls.BASE}/guilds/{guild_id}/users/{member_id}/avatars/{avatar}.{format}?size=1024",
+            url=f'{cls.BASE}/guilds/{guild_id}/users/{member_id}/avatars/{avatar}.{format}?size=1024',
             key=avatar,
             animated=animated,
+        )
+
+    @classmethod
+    def _from_guild_banner(cls, state: _State, guild_id: int, member_id: int, banner: str) -> Self:
+        animated = banner.startswith('a_')
+        format = 'gif' if animated else 'png'
+        return cls(
+            state,
+            url=f'{cls.BASE}/guilds/{guild_id}/users/{member_id}/banners/{banner}.{format}?size=1024',
+            key=banner,
+            animated=animated,
+        )
+
+    @classmethod
+    def _from_avatar_decoration(cls, state: _State, avatar_decoration: str) -> Self:
+        return cls(
+            state,
+            url=f'{cls.BASE}/avatar-decoration-presets/{avatar_decoration}.png?size=96',
+            key=avatar_decoration,
+            animated=True,
         )
 
     @classmethod
@@ -323,6 +343,25 @@ class Asset(AssetMixin):
             state,
             url=f'{cls.BASE}/banners/{user_id}/{banner_hash}.{format}?size=512',
             key=banner_hash,
+            animated=animated,
+        )
+
+    @classmethod
+    def _from_primary_guild(cls, state: _State, guild_id: int, icon_hash: str) -> Self:
+        return cls(
+            state,
+            url=f'{cls.BASE}/guild-tag-badges/{guild_id}/{icon_hash}.png?size=64',
+            key=icon_hash,
+            animated=False,
+        )
+
+    @classmethod
+    def _from_user_collectible(cls, state: _State, asset: str, animated: bool = False) -> Self:
+        name = 'static.png' if not animated else 'asset.webm'
+        return cls(
+            state,
+            url=f'{cls.BASE}/assets/collectibles/{asset}{name}',
+            key=asset,
             animated=animated,
         )
 
@@ -420,7 +459,7 @@ class Asset(AssetMixin):
             url = url.with_query(url.raw_query_string)
 
         url = str(url)
-        return Asset(state=self._state, url=url, key=self._key, animated=self._animated)
+        return self.__class__(state=self._state, url=url, key=self._key, animated=self._animated)
 
     def with_size(self, size: int, /) -> Self:
         """Returns a new asset with the specified size.
@@ -448,7 +487,7 @@ class Asset(AssetMixin):
             raise ValueError('size must be a power of 2 between 16 and 4096')
 
         url = str(yarl.URL(self._url).with_query(size=size))
-        return Asset(state=self._state, url=url, key=self._key, animated=self._animated)
+        return self.__class__(state=self._state, url=url, key=self._key, animated=self._animated)
 
     def with_format(self, format: ValidAssetFormatTypes, /) -> Self:
         """Returns a new asset with the specified format.
@@ -483,7 +522,7 @@ class Asset(AssetMixin):
         url = yarl.URL(self._url)
         path, _ = os.path.splitext(url.path)
         url = str(url.with_path(f'{path}.{format}').with_query(url.raw_query_string))
-        return Asset(state=self._state, url=url, key=self._key, animated=self._animated)
+        return self.__class__(state=self._state, url=url, key=self._key, animated=self._animated)
 
     def with_static_format(self, format: ValidStaticFormatTypes, /) -> Self:
         """Returns a new asset with the specified static format.

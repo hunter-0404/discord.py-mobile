@@ -50,6 +50,25 @@ if TYPE_CHECKING:
     from .context import Context
     from .parameters import Parameter
 
+try:
+    from annotationlib import call_annotate_function, get_annotate_from_class_namespace  # type: ignore
+
+    def get_annotations_from_namespace(namespace: Dict[str, Any]) -> Dict[str, Any]:
+        # In Python 3.14, classes no longer get `__annotations__` and instead a function
+        # under __annotate__ is used instead that that takes a format argument on how to
+        # receive those annotations.
+        # Format 1 is full value, Format 3 is value and ForwardRef for undefined ones
+        # So format 3 is the one we're typically used to
+        annotate = get_annotate_from_class_namespace(namespace)
+        if annotate is not None:
+            return call_annotate_function(annotate, 3)  # type: ignore
+        return namespace.get('__annotations__', {})
+
+except ImportError:
+
+    def get_annotations_from_namespace(namespace: Dict[str, Any]) -> Dict[str, Any]:
+        return namespace.get('__annotations__', {})
+
 
 @dataclass
 class Flag:
@@ -79,6 +98,10 @@ class Flag:
     description: :class:`str`
         The description of the flag. Shown for hybrid commands when they're
         used as application commands.
+    positional: :class:`bool`
+        Whether the flag is positional or not. There can only be one positional flag.
+
+        .. versionadded:: 2.4
     """
 
     name: str = MISSING
@@ -89,6 +112,7 @@ class Flag:
     max_args: int = MISSING
     override: bool = MISSING
     description: str = MISSING
+    positional: bool = MISSING
     cast_to_dict: bool = False
 
     @property
@@ -109,6 +133,7 @@ def flag(
     override: bool = MISSING,
     converter: Any = MISSING,
     description: str = MISSING,
+    positional: bool = MISSING,
 ) -> Any:
     """Override default functionality and parameters of the underlying :class:`FlagConverter`
     class attributes.
@@ -136,6 +161,10 @@ def flag(
     description: :class:`str`
         The description of the flag. Shown for hybrid commands when they're
         used as application commands.
+    positional: :class:`bool`
+        Whether the flag is positional or not. There can only be one positional flag.
+
+        .. versionadded:: 2.4
     """
     return Flag(
         name=name,
@@ -145,6 +174,7 @@ def flag(
         override=override,
         annotation=converter,
         description=description,
+        positional=positional,
     )
 
 
@@ -166,11 +196,12 @@ def validate_flag_name(name: str, forbidden: Set[str]) -> None:
 
 
 def get_flags(namespace: Dict[str, Any], globals: Dict[str, Any], locals: Dict[str, Any]) -> Dict[str, Flag]:
-    annotations = namespace.get('__annotations__', {})
+    annotations = get_annotations_from_namespace(namespace)
     case_insensitive = namespace['__commands_flag_case_insensitive__']
     flags: Dict[str, Flag] = {}
     cache: Dict[str, Any] = {}
     names: Set[str] = set()
+    positional: Optional[Flag] = None
     for name, annotation in annotations.items():
         flag = namespace.pop(name, MISSING)
         if isinstance(flag, Flag):
@@ -182,6 +213,11 @@ def get_flags(namespace: Dict[str, Any], globals: Dict[str, Any], locals: Dict[s
         flag.attribute = name
         if flag.name is MISSING:
             flag.name = name
+
+        if flag.positional:
+            if positional is not None:
+                raise TypeError(f'{flag.name!r} positional flag conflicts with {positional.name!r} flag.')
+            positional = flag
 
         annotation = flag.annotation = resolve_annotation(flag.annotation, globals, locals, cache)
 
@@ -270,6 +306,7 @@ class FlagsMeta(type):
         __commands_flag_case_insensitive__: bool
         __commands_flag_delimiter__: str
         __commands_flag_prefix__: str
+        __commands_flag_positional__: Optional[Flag]
 
     def __new__(
         cls,
@@ -280,7 +317,7 @@ class FlagsMeta(type):
         case_insensitive: bool = MISSING,
         delimiter: str = MISSING,
         prefix: str = MISSING,
-    ) -> Self:
+    ) -> FlagsMeta:
         attrs['__commands_is_flag__'] = True
 
         try:
@@ -324,9 +361,13 @@ class FlagsMeta(type):
         delimiter = attrs.setdefault('__commands_flag_delimiter__', ':')
         prefix = attrs.setdefault('__commands_flag_prefix__', '')
 
+        positional: Optional[Flag] = None
         for flag_name, flag in get_flags(attrs, global_ns, local_ns).items():
             flags[flag_name] = flag
             aliases.update({alias_name: flag_name for alias_name in flag.aliases})
+            if flag.positional:
+                positional = flag
+        attrs['__commands_flag_positional__'] = positional
 
         forbidden = set(delimiter).union(prefix)
         for flag_name in flags:
@@ -421,7 +462,7 @@ async def convert_flag(ctx: Context[BotT], argument: str, flag: Flag, annotation
             return await convert_flag(ctx, argument, flag, annotation)
         elif origin is Union and type(None) in annotation.__args__:
             # typing.Optional[x]
-            annotation = Union[tuple(arg for arg in annotation.__args__ if arg is not type(None))]  # type: ignore
+            annotation = Union[tuple(arg for arg in annotation.__args__ if arg is not type(None))]
             return await run_converters(ctx, annotation, argument, param)
         elif origin is dict:
             # typing.Dict[K, V] -> typing.Tuple[K, V]
@@ -500,10 +541,25 @@ class FlagConverter(metaclass=FlagsMeta):
         result: Dict[str, List[str]] = {}
         flags = cls.__commands_flags__
         aliases = cls.__commands_flag_aliases__
+        positional_flag = cls.__commands_flag_positional__
         last_position = 0
         last_flag: Optional[Flag] = None
 
         case_insensitive = cls.__commands_flag_case_insensitive__
+
+        if positional_flag is not None:
+            match = cls.__commands_flag_regex__.search(argument)
+            if match is not None:
+                begin, end = match.span(0)
+                value = argument[:begin].strip()
+            else:
+                value = argument.strip()
+                last_position = len(argument)
+
+            if value:
+                name = positional_flag.name.casefold() if case_insensitive else positional_flag.name
+                result[name] = [value]
+
         for match in cls.__commands_flag_regex__.finditer(argument):
             begin, end = match.span(0)
             key = match.group('flag')

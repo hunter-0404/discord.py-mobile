@@ -21,6 +21,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 """
+
 from __future__ import annotations
 
 import re
@@ -48,8 +49,9 @@ if TYPE_CHECKING:
     from discord.mentions import AllowedMentions
     from discord.sticker import GuildSticker, StickerItem
     from discord.message import MessageReference, PartialMessage
-    from discord.ui import View
+    from discord.ui.view import BaseView, View, LayoutView
     from discord.types.interactions import ApplicationCommandInteractionData
+    from discord.poll import Poll
 
     from .cog import Cog
     from .core import Command
@@ -69,7 +71,7 @@ MISSING: Any = discord.utils.MISSING
 
 
 T = TypeVar('T')
-CogT = TypeVar('CogT', bound="Cog")
+CogT = TypeVar('CogT', bound='Cog')
 
 if TYPE_CHECKING:
     P = ParamSpec('P')
@@ -81,16 +83,20 @@ def is_cog(obj: Any) -> TypeGuard[Cog]:
     return hasattr(obj, '__cog_commands__')
 
 
-class DeferTyping:
+class DeferTyping(Generic[BotT]):
     def __init__(self, ctx: Context[BotT], *, ephemeral: bool):
         self.ctx: Context[BotT] = ctx
         self.ephemeral: bool = ephemeral
 
+    async def do_defer(self) -> None:
+        if self.ctx.interaction and not self.ctx.interaction.response.is_done():
+            await self.ctx.interaction.response.defer(ephemeral=self.ephemeral)
+
     def __await__(self) -> Generator[Any, None, None]:
-        return self.ctx.defer(ephemeral=self.ephemeral).__await__()
+        return self.do_defer().__await__()
 
     async def __aenter__(self) -> None:
-        await self.ctx.defer(ephemeral=self.ephemeral)
+        await self.do_defer()
 
     async def __aexit__(
         self,
@@ -253,6 +259,7 @@ class Context(discord.abc.Messageable, Generic[BotT]):
 
         bot: BotT = interaction.client
         data: ApplicationCommandInteractionData = interaction.data  # type: ignore
+        type_ = data.get('type', 1)
         if interaction.message is None:
             synthetic_payload = {
                 'id': interaction.id,
@@ -262,7 +269,7 @@ class Context(discord.abc.Messageable, Generic[BotT]):
                 'tts': False,
                 'pinned': False,
                 'edited_timestamp': None,
-                'type': MessageType.chat_input_command if data.get('type', 1) == 1 else MessageType.context_menu_command,
+                'type': MessageType.chat_input_command.value if type_ == 1 else MessageType.context_menu_command.value,
                 'flags': 64,
                 'content': '',
                 'mentions': [],
@@ -282,7 +289,7 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         else:
             message = interaction.message
 
-        prefix = '/' if data.get('type', 1) == 1 else '\u200b'  # Mock the prefix
+        prefix = '/' if type_ == 1 else '\u200b'  # Mock the prefix
         ctx = cls(
             message=message,
             bot=bot,
@@ -419,8 +426,8 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         # consider this to be an *incredibly* strange use case. I'd rather go
         # for this common use case rather than waste performance for the
         # odd one.
-        pattern = re.compile(r"<@!?%s>" % user.id)
-        return pattern.sub("@%s" % user.display_name.replace('\\', r'\\'), self.prefix)
+        pattern = re.compile(r'<@!?%s>' % user.id)
+        return pattern.sub('@%s' % user.display_name.replace('\\', r'\\'), self.prefix)
 
     @property
     def cog(self) -> Optional[Cog]:
@@ -472,7 +479,7 @@ class Context(discord.abc.Messageable, Generic[BotT]):
 
         .. versionadded:: 2.0
         """
-        if self.channel.type is ChannelType.private:
+        if self.interaction is None and self.channel.type is ChannelType.private:
             return Permissions._dm_permissions()
         if not self.interaction:
             # channel and author will always match relevant types here
@@ -506,7 +513,7 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         .. versionadded:: 2.0
         """
         channel = self.channel
-        if channel.type == ChannelType.private:
+        if self.interaction is None and channel.type == ChannelType.private:
             return Permissions._dm_permissions()
         if not self.interaction:
             # channel and me will always match relevant types here
@@ -626,6 +633,38 @@ class Context(discord.abc.Messageable, Generic[BotT]):
     @overload
     async def reply(
         self,
+        *,
+        file: File = ...,
+        delete_after: float = ...,
+        nonce: Union[str, int] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        reference: Union[Message, MessageReference, PartialMessage] = ...,
+        mention_author: bool = ...,
+        view: LayoutView,
+        suppress_embeds: bool = ...,
+        ephemeral: bool = ...,
+        silent: bool = ...,
+    ) -> Message: ...
+
+    @overload
+    async def reply(
+        self,
+        *,
+        files: Sequence[File] = ...,
+        delete_after: float = ...,
+        nonce: Union[str, int] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        reference: Union[Message, MessageReference, PartialMessage] = ...,
+        mention_author: bool = ...,
+        view: LayoutView,
+        suppress_embeds: bool = ...,
+        ephemeral: bool = ...,
+        silent: bool = ...,
+    ) -> Message: ...
+
+    @overload
+    async def reply(
+        self,
         content: Optional[str] = ...,
         *,
         tts: bool = ...,
@@ -641,8 +680,8 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         suppress_embeds: bool = ...,
         ephemeral: bool = ...,
         silent: bool = ...,
-    ) -> Message:
-        ...
+        poll: Poll = ...,
+    ) -> Message: ...
 
     @overload
     async def reply(
@@ -662,8 +701,8 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         suppress_embeds: bool = ...,
         ephemeral: bool = ...,
         silent: bool = ...,
-    ) -> Message:
-        ...
+        poll: Poll = ...,
+    ) -> Message: ...
 
     @overload
     async def reply(
@@ -683,8 +722,8 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         suppress_embeds: bool = ...,
         ephemeral: bool = ...,
         silent: bool = ...,
-    ) -> Message:
-        ...
+        poll: Poll = ...,
+    ) -> Message: ...
 
     @overload
     async def reply(
@@ -704,8 +743,8 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         suppress_embeds: bool = ...,
         ephemeral: bool = ...,
         silent: bool = ...,
-    ) -> Message:
-        ...
+        poll: Poll = ...,
+    ) -> Message: ...
 
     async def reply(self, content: Optional[str] = None, **kwargs: Any) -> Message:
         """|coro|
@@ -742,7 +781,7 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         else:
             return await self.send(content, **kwargs)
 
-    def typing(self, *, ephemeral: bool = False) -> Union[Typing, DeferTyping]:
+    def typing(self, *, ephemeral: bool = False) -> Union[Typing, DeferTyping[BotT]]:
         """Returns an asynchronous context manager that allows you to send a typing indicator to
         the destination for an indefinite period of time, or 10 seconds if the context manager
         is called using ``await``.
@@ -811,6 +850,38 @@ class Context(discord.abc.Messageable, Generic[BotT]):
     @overload
     async def send(
         self,
+        *,
+        file: File = ...,
+        delete_after: float = ...,
+        nonce: Union[str, int] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        reference: Union[Message, MessageReference, PartialMessage] = ...,
+        mention_author: bool = ...,
+        view: LayoutView,
+        suppress_embeds: bool = ...,
+        ephemeral: bool = ...,
+        silent: bool = ...,
+    ) -> Message: ...
+
+    @overload
+    async def send(
+        self,
+        *,
+        files: Sequence[File] = ...,
+        delete_after: float = ...,
+        nonce: Union[str, int] = ...,
+        allowed_mentions: AllowedMentions = ...,
+        reference: Union[Message, MessageReference, PartialMessage] = ...,
+        mention_author: bool = ...,
+        view: LayoutView,
+        suppress_embeds: bool = ...,
+        ephemeral: bool = ...,
+        silent: bool = ...,
+    ) -> Message: ...
+
+    @overload
+    async def send(
+        self,
         content: Optional[str] = ...,
         *,
         tts: bool = ...,
@@ -826,8 +897,8 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         suppress_embeds: bool = ...,
         ephemeral: bool = ...,
         silent: bool = ...,
-    ) -> Message:
-        ...
+        poll: Poll = ...,
+    ) -> Message: ...
 
     @overload
     async def send(
@@ -847,8 +918,8 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         suppress_embeds: bool = ...,
         ephemeral: bool = ...,
         silent: bool = ...,
-    ) -> Message:
-        ...
+        poll: Poll = ...,
+    ) -> Message: ...
 
     @overload
     async def send(
@@ -868,8 +939,8 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         suppress_embeds: bool = ...,
         ephemeral: bool = ...,
         silent: bool = ...,
-    ) -> Message:
-        ...
+        poll: Poll = ...,
+    ) -> Message: ...
 
     @overload
     async def send(
@@ -889,8 +960,8 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         suppress_embeds: bool = ...,
         ephemeral: bool = ...,
         silent: bool = ...,
-    ) -> Message:
-        ...
+        poll: Poll = ...,
+    ) -> Message: ...
 
     async def send(
         self,
@@ -907,10 +978,11 @@ class Context(discord.abc.Messageable, Generic[BotT]):
         allowed_mentions: Optional[AllowedMentions] = None,
         reference: Optional[Union[Message, MessageReference, PartialMessage]] = None,
         mention_author: Optional[bool] = None,
-        view: Optional[View] = None,
+        view: Optional[BaseView] = None,
         suppress_embeds: bool = False,
         ephemeral: bool = False,
         silent: bool = False,
+        poll: Optional[Poll] = None,
     ) -> Message:
         """|coro|
 
@@ -972,7 +1044,7 @@ class Context(discord.abc.Messageable, Generic[BotT]):
             This is ignored for interaction based contexts.
 
             .. versionadded:: 1.6
-        view: :class:`discord.ui.View`
+        view: Union[:class:`discord.ui.View`, :class:`discord.ui.LayoutView`]
             A Discord UI View to add to the message.
 
             .. versionadded:: 2.0
@@ -999,6 +1071,13 @@ class Context(discord.abc.Messageable, Generic[BotT]):
             in the UI, but will not actually send a notification.
 
             .. versionadded:: 2.2
+
+        poll: Optional[:class:`~discord.Poll`]
+            The poll to send with this message.
+
+            .. versionadded:: 2.4
+            .. versionchanged:: 2.6
+                This can now be ``None`` and defaults to ``None`` instead of ``MISSING``.
 
         Raises
         --------
@@ -1037,6 +1116,7 @@ class Context(discord.abc.Messageable, Generic[BotT]):
                 view=view,
                 suppress_embeds=suppress_embeds,
                 silent=silent,
+                poll=poll,
             )  # type: ignore # The overloads don't support Optional but the implementation does
 
         # Convert the kwargs from None to MISSING to appease the remaining implementations
@@ -1052,13 +1132,17 @@ class Context(discord.abc.Messageable, Generic[BotT]):
             'suppress_embeds': suppress_embeds,
             'ephemeral': ephemeral,
             'silent': silent,
+            'poll': MISSING if poll is None else poll,
         }
 
         if self.interaction.response.is_done():
             msg = await self.interaction.followup.send(**kwargs, wait=True)
         else:
-            await self.interaction.response.send_message(**kwargs)
-            msg = await self.interaction.original_response()
+            response = await self.interaction.response.send_message(**kwargs)
+            if not isinstance(response.resource, discord.InteractionMessage):
+                msg = await self.interaction.original_response()
+            else:
+                msg = response.resource
 
         if delete_after is not None:
             await msg.delete(delay=delete_after)

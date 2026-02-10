@@ -29,9 +29,10 @@ from .asset import Asset
 from .utils import parse_time, snowflake_time, _get_as_snowflake
 from .object import Object
 from .mixins import Hashable
-from .enums import ChannelType, NSFWLevel, VerificationLevel, InviteTarget, try_enum
+from .enums import ChannelType, NSFWLevel, VerificationLevel, InviteTarget, InviteType, try_enum
 from .appinfo import PartialAppInfo
 from .scheduled_event import ScheduledEvent
+from .flags import InviteFlags
 
 __all__ = (
     'PartialInviteChannel',
@@ -289,13 +290,15 @@ class Invite(Hashable):
     +------------------------------------+--------------------------------------------------------------+
     | :attr:`approximate_presence_count` | :meth:`Client.fetch_invite` with ``with_counts`` enabled     |
     +------------------------------------+--------------------------------------------------------------+
-    | :attr:`expires_at`                 | :meth:`Client.fetch_invite` with ``with_expiration`` enabled |
-    +------------------------------------+--------------------------------------------------------------+
 
     If it's not in the table above then it is available by all methods.
 
     Attributes
     -----------
+    type: :class:`InviteType`
+        The type of the invite.
+
+        .. versionadded: 2.4
     max_age: Optional[:class:`int`]
         How long before the invite expires in seconds.
         A value of ``0`` indicates that it doesn't expire.
@@ -327,6 +330,9 @@ class Invite(Hashable):
         :meth:`Client.fetch_invite` with ``with_expiration`` enabled, the invite will never expire.
 
         .. versionadded:: 2.0
+        .. versionchanged:: 2.6
+            This will always be returned from all methods. ``None`` if the invite will
+            never expire.
 
     channel: Optional[Union[:class:`abc.GuildChannel`, :class:`Object`, :class:`PartialInviteChannel`]]
         The channel the invite is for.
@@ -374,6 +380,8 @@ class Invite(Hashable):
         'expires_at',
         'scheduled_event',
         'scheduled_event_id',
+        'type',
+        '_flags',
     )
 
     BASE = 'https://discord.gg'
@@ -387,6 +395,7 @@ class Invite(Hashable):
         channel: Optional[Union[PartialInviteChannel, GuildChannel]] = None,
     ):
         self._state: ConnectionState = state
+        self.type: InviteType = try_enum(InviteType, data.get('type', 0))
         self.max_age: Optional[int] = data.get('max_age')
         self.code: str = data['code']
         self.guild: Optional[InviteGuildType] = self._resolve_guild(data.get('guild'), guild)
@@ -409,7 +418,7 @@ class Invite(Hashable):
         target_user_data = data.get('target_user')
         self.target_user: Optional[User] = None if target_user_data is None else self._state.create_user(target_user_data)
 
-        self.target_type: InviteTarget = try_enum(InviteTarget, data.get("target_type", 0))
+        self.target_type: InviteTarget = try_enum(InviteTarget, data.get('target_type', 0))
 
         application = data.get('target_application')
         self.target_application: Optional[PartialAppInfo] = (
@@ -426,12 +435,13 @@ class Invite(Hashable):
             else None
         )
         self.scheduled_event_id: Optional[int] = self.scheduled_event.id if self.scheduled_event else None
+        self._flags: int = data.get('flags', 0)
 
     @classmethod
     def from_incomplete(cls, *, state: ConnectionState, data: InvitePayload) -> Self:
         guild: Optional[Union[Guild, PartialInviteGuild]]
         try:
-            guild_data = data['guild']
+            guild_data = data['guild']  # pyright: ignore[reportTypedDictNotRequiredAccess]
         except KeyError:
             # If we're here, then this is a group DM
             guild = None
@@ -496,7 +506,7 @@ class Invite(Hashable):
 
     def __repr__(self) -> str:
         return (
-            f'<Invite code={self.code!r} guild={self.guild!r} '
+            f'<Invite type={self.type} code={self.code!r} guild={self.guild!r} '
             f'online={self.approximate_presence_count} '
             f'members={self.approximate_member_count}>'
         )
@@ -516,6 +526,14 @@ class Invite(Hashable):
         if self.scheduled_event_id is not None:
             url += '?event=' + str(self.scheduled_event_id)
         return url
+
+    @property
+    def flags(self) -> InviteFlags:
+        """:class:`InviteFlags`: Returns the flags for this invite.
+
+        .. versionadded:: 2.6
+        """
+        return InviteFlags._from_value(self._flags)
 
     def set_scheduled_event(self, scheduled_event: Snowflake, /) -> Self:
         """Sets the scheduled event for this invite.
@@ -540,7 +558,7 @@ class Invite(Hashable):
 
         return self
 
-    async def delete(self, *, reason: Optional[str] = None) -> None:
+    async def delete(self, *, reason: Optional[str] = None) -> Self:
         """|coro|
 
         Revokes the instant invite.
@@ -562,4 +580,5 @@ class Invite(Hashable):
             Revoking the invite failed.
         """
 
-        await self._state.http.delete_invite(self.code, reason=reason)
+        data = await self._state.http.delete_invite(self.code, reason=reason)
+        return self.from_incomplete(state=self._state, data=data)

@@ -179,9 +179,9 @@ class Namespace:
         state = interaction._state
         members = resolved.get('members', {})
         guild_id = interaction.guild_id
-        guild = state._get_or_create_unavailable_guild(guild_id) if guild_id is not None else None
+        guild = interaction.guild
         type = AppCommandOptionType.user.value
-        for (user_id, user_data) in resolved.get('users', {}).items():
+        for user_id, user_data in resolved.get('users', {}).items():
             try:
                 member_data = members[user_id]
             except KeyError:
@@ -203,7 +203,7 @@ class Namespace:
         )
 
         type = AppCommandOptionType.channel.value
-        for (channel_id, channel_data) in resolved.get('channels', {}).items():
+        for channel_id, channel_data in resolved.get('channels', {}).items():
             key = ResolveKey(id=channel_id, type=type)
             if channel_data['type'] in (10, 11, 12):
                 # The guild ID can't be none in this case
@@ -220,8 +220,7 @@ class Namespace:
             }
         )
 
-        guild = state._get_guild(guild_id)
-        for (message_id, message_data) in resolved.get('messages', {}).items():
+        for message_id, message_data in resolved.get('messages', {}).items():
             channel_id = int(message_data['channel_id'])
             if guild is None:
                 channel = PartialMessageable(state=state, guild_id=guild_id, id=channel_id)
@@ -232,6 +231,7 @@ class Namespace:
 
             # Type checker doesn't understand this due to failure to narrow
             message = Message(state=state, channel=channel, data=message_data)  # type: ignore
+            message.guild = guild
             key = ResolveKey(id=message_id, type=-1)
             completed[key] = message
 

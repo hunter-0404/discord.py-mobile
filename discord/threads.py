@@ -109,6 +109,10 @@ class Thread(Messageable, Hashable):
         An approximate number of messages in this thread.
     member_count: :class:`int`
         An approximate number of members in this thread. This caps at 50.
+    total_message_sent: :class:`int`
+        The total number of messages sent, including deleted messages.
+
+        .. versionadded:: 2.6
     me: Optional[:class:`ThreadMember`]
         A thread member representing yourself, if you've joined the thread.
         This could not be available.
@@ -121,6 +125,10 @@ class Thread(Messageable, Hashable):
         This is always ``True`` for public threads.
     archiver_id: Optional[:class:`int`]
         The user's ID that archived this thread.
+
+        .. note::
+            Due to an API change, the ``archiver_id`` will always be ``None`` and can only be obtained via the audit log.
+
     auto_archive_duration: :class:`int`
         The duration in minutes until the thread is automatically hidden from the channel list.
         Usually a value of 60, 1440, 4320 and 10080.
@@ -148,6 +156,7 @@ class Thread(Messageable, Hashable):
         'archiver_id',
         'auto_archive_duration',
         'archive_timestamp',
+        'total_message_sent',
         '_created_at',
         '_flags',
         '_applied_tags',
@@ -181,6 +190,7 @@ class Thread(Messageable, Hashable):
         self.slowmode_delay: int = data.get('rate_limit_per_user', 0)
         self.message_count: int = data['message_count']
         self.member_count: int = data['member_count']
+        self.total_message_sent: int = data.get('total_message_sent', 0)
         self._flags: int = data.get('flags', 0)
         # SnowflakeList is sorted, but this would not be proper for applied tags, where order actually matters.
         self._applied_tags: array.array[int] = array.array('Q', map(int, data.get('applied_tags', [])))
@@ -188,7 +198,7 @@ class Thread(Messageable, Hashable):
 
         self.me: Optional[ThreadMember]
         try:
-            member = data['member']
+            member = data['member']  # pyright: ignore[reportTypedDictNotRequiredAccess]
         except KeyError:
             self.me = None
         else:
@@ -268,12 +278,12 @@ class Thread(Messageable, Hashable):
         .. versionadded:: 2.1
         """
         tags = []
-        if self.parent is None or self.parent.type != ChannelType.forum:
+        if self.parent is None or self.parent.type not in (ChannelType.forum, ChannelType.media):
             return tags
 
         parent = self.parent
         for tag_id in self._applied_tags:
-            tag = parent.get_tag(tag_id)
+            tag = parent.get_tag(tag_id)  # type: ignore # parent here will be ForumChannel instance
             if tag is not None:
                 tags.append(tag)
 
@@ -846,12 +856,20 @@ class Thread(Messageable, Hashable):
         members = await self._state.http.get_thread_members(self.id)
         return [ThreadMember(parent=self, data=data) for data in members]
 
-    async def delete(self) -> None:
+    async def delete(self, *, reason: Optional[str] = None) -> None:
         """|coro|
 
         Deletes this thread.
 
         You must have :attr:`~Permissions.manage_threads` to delete threads.
+
+        Parameters
+        -----------
+        reason: Optional[:class:`str`]
+            The reason for deleting this thread.
+            Shows up on the audit log.
+
+            .. versionadded:: 2.4
 
         Raises
         -------
@@ -860,7 +878,7 @@ class Thread(Messageable, Hashable):
         HTTPException
             Deleting the thread failed.
         """
-        await self._state.http.delete_channel(self.id)
+        await self._state.http.delete_channel(self.id, reason=reason)
 
     def get_partial_message(self, message_id: int, /) -> PartialMessage:
         """Creates a :class:`PartialMessage` from the message ID.

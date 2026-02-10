@@ -47,6 +47,12 @@ __all__ = (
     'ConnectionClosed',
     'PrivilegedIntentsRequired',
     'InteractionResponded',
+    'MissingApplicationID',
+)
+
+APP_ID_NOT_FOUND = (
+    'Client does not have an application_id set. Either the function was called before on_ready '
+    'was called or application_id was not passed to the Client constructor.'
 )
 
 
@@ -255,7 +261,7 @@ class PrivilegedIntentsRequired(ClientException):
         msg = (
             'Shard ID %s is requesting privileged intents that have not been explicitly enabled in the '
             'developer portal. It is recommended to go to https://discord.com/developers/applications/ '
-            'and explicitly enable the privileged intents within your application\'s page. If this is not '
+            "and explicitly enable the privileged intents within your application's page. If this is not "
             'possible, then consider disabling the privileged intents instead.'
         )
         super().__init__(msg % shard_id)
@@ -278,3 +284,22 @@ class InteractionResponded(ClientException):
     def __init__(self, interaction: Interaction):
         self.interaction: Interaction = interaction
         super().__init__('This interaction has already been responded to before')
+
+
+class MissingApplicationID(ClientException):
+    """An exception raised when the client does not have an application ID set.
+
+    An application ID is required for syncing application commands and various
+    other application tasks such as SKUs or application emojis.
+
+    This inherits from :exc:`~discord.app_commands.AppCommandError`
+    and :class:`~discord.ClientException`.
+
+    .. versionadded:: 2.0
+
+    .. versionchanged:: 2.5
+        This is now exported to the ``discord`` namespace and now inherits from :class:`~discord.ClientException`.
+    """
+
+    def __init__(self, message: Optional[str] = None):
+        super().__init__(message or APP_ID_NOT_FOUND)

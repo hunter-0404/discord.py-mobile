@@ -31,7 +31,9 @@ from .asset import Asset
 from .colour import Colour
 from .enums import DefaultAvatar
 from .flags import PublicUserFlags
-from .utils import snowflake_time, _bytes_to_base64_data, MISSING
+from .utils import snowflake_time, _bytes_to_base64_data, MISSING, _get_as_snowflake
+from .primary_guild import PrimaryGuild
+from .collectible import Collectible
 
 if TYPE_CHECKING:
     from typing_extensions import Self
@@ -46,6 +48,9 @@ if TYPE_CHECKING:
     from .types.user import (
         PartialUser as PartialUserPayload,
         User as UserPayload,
+        AvatarDecorationData,
+        PrimaryGuild as PrimaryGuildPayload,
+        UserCollectibles as UserCollectiblesPayload,
     )
 
 
@@ -73,6 +78,9 @@ class BaseUser(_UserTag):
         'system',
         '_public_flags',
         '_state',
+        '_avatar_decoration_data',
+        '_primary_guild',
+        '_collectibles',
     )
 
     if TYPE_CHECKING:
@@ -87,6 +95,9 @@ class BaseUser(_UserTag):
         _banner: Optional[str]
         _accent_colour: Optional[int]
         _public_flags: int
+        _avatar_decoration_data: Optional[AvatarDecorationData]
+        _primary_guild: Optional[PrimaryGuildPayload]
+        _collectibles: Optional[UserCollectiblesPayload]
 
     def __init__(self, *, state: ConnectionState, data: Union[UserPayload, PartialUserPayload]) -> None:
         self._state = state
@@ -94,8 +105,8 @@ class BaseUser(_UserTag):
 
     def __repr__(self) -> str:
         return (
-            f"<BaseUser id={self.id} name={self.name!r} global_name={self.global_name!r}"
-            f" bot={self.bot} system={self.system}>"
+            f'<BaseUser id={self.id} name={self.name!r} global_name={self.global_name!r}'
+            f' bot={self.bot} system={self.system}>'
         )
 
     def __str__(self) -> str:
@@ -123,6 +134,9 @@ class BaseUser(_UserTag):
         self._public_flags = data.get('public_flags', 0)
         self.bot = data.get('bot', False)
         self.system = data.get('system', False)
+        self._avatar_decoration_data = data.get('avatar_decoration_data')
+        self._primary_guild = data.get('primary_guild', None)
+        self._collectibles = data.get('collectibles', None)
 
     @classmethod
     def _copy(cls, user: Self) -> Self:
@@ -138,6 +152,9 @@ class BaseUser(_UserTag):
         self.bot = user.bot
         self._state = user._state
         self._public_flags = user._public_flags
+        self._avatar_decoration_data = user._avatar_decoration_data
+        self._primary_guild = user._primary_guild
+        self._collectibles = user._collectibles
 
         return self
 
@@ -170,7 +187,7 @@ class BaseUser(_UserTag):
     @property
     def default_avatar(self) -> Asset:
         """:class:`Asset`: Returns the default avatar for a given user."""
-        if self.discriminator == '0':
+        if self.discriminator in ('0', '0000'):
             avatar_id = (self.id >> 22) % len(DefaultAvatar)
         else:
             avatar_id = int(self.discriminator) % 5
@@ -186,6 +203,30 @@ class BaseUser(_UserTag):
         .. versionadded:: 2.0
         """
         return self.avatar or self.default_avatar
+
+    @property
+    def avatar_decoration(self) -> Optional[Asset]:
+        """Optional[:class:`Asset`]: Returns an :class:`Asset` for the avatar decoration the user has.
+
+        If the user has not set an avatar decoration, ``None`` is returned.
+
+        .. versionadded:: 2.4
+        """
+        if self._avatar_decoration_data is not None:
+            return Asset._from_avatar_decoration(self._state, self._avatar_decoration_data['asset'])
+        return None
+
+    @property
+    def avatar_decoration_sku_id(self) -> Optional[int]:
+        """Optional[:class:`int`]: Returns the SKU ID of the avatar decoration the user has.
+
+        If the user has not set an avatar decoration, ``None`` is returned.
+
+        .. versionadded:: 2.4
+        """
+        if self._avatar_decoration_data is not None:
+            return _get_as_snowflake(self._avatar_decoration_data, 'sku_id')
+        return None
 
     @property
     def banner(self) -> Optional[Asset]:
@@ -280,6 +321,25 @@ class BaseUser(_UserTag):
             return self.global_name
         return self.name
 
+    @property
+    def primary_guild(self) -> PrimaryGuild:
+        """:class:`PrimaryGuild`: Returns the user's primary guild.
+
+        .. versionadded:: 2.6"""
+        if self._primary_guild is not None:
+            return PrimaryGuild(state=self._state, data=self._primary_guild)
+        return PrimaryGuild._default(self._state)
+
+    @property
+    def collectibles(self) -> List[Collectible]:
+        """List[:class:`Collectible`]: Returns a list of the user's collectibles.
+
+        .. versionadded:: 2.7
+        """
+        if self._collectibles is None:
+            return []
+        return [Collectible(state=self._state, type=key, data=value) for key, value in self._collectibles.items() if value]  # type: ignore
+
     def mentioned_in(self, message: Message) -> bool:
         """Checks if the user is mentioned in the specified message.
 
@@ -373,7 +433,9 @@ class ClientUser(BaseUser):
         self._flags = data.get('flags', 0)
         self.mfa_enabled = data.get('mfa_enabled', False)
 
-    async def edit(self, *, username: str = MISSING, avatar: Optional[bytes] = MISSING) -> ClientUser:
+    async def edit(
+        self, *, username: str = MISSING, avatar: Optional[bytes] = MISSING, banner: Optional[bytes] = MISSING
+    ) -> ClientUser:
         """|coro|
 
         Edits the current profile of the client.
@@ -385,7 +447,6 @@ class ClientUser(BaseUser):
             then the file must be opened via ``open('some_filename', 'rb')`` and
             the :term:`py:bytes-like object` is given through the use of ``fp.read()``.
 
-            The only image formats supported for uploading is JPEG and PNG.
 
         .. versionchanged:: 2.0
             The edit is no longer in-place, instead the newly edited client user is returned.
@@ -401,6 +462,13 @@ class ClientUser(BaseUser):
         avatar: Optional[:class:`bytes`]
             A :term:`py:bytes-like object` representing the image to upload.
             Could be ``None`` to denote no avatar.
+            Only image formats supported for uploading are JPEG, PNG, GIF, and WEBP.
+        banner: Optional[:class:`bytes`]
+            A :term:`py:bytes-like object` representing the image to upload.
+            Could be ``None`` to denote no banner.
+            Only image formats supported for uploading are JPEG, PNG, GIF and WEBP.
+
+            .. versionadded:: 2.4
 
         Raises
         ------
@@ -423,6 +491,12 @@ class ClientUser(BaseUser):
                 payload['avatar'] = _bytes_to_base64_data(avatar)
             else:
                 payload['avatar'] = None
+
+        if banner is not MISSING:
+            if banner is not None:
+                payload['banner'] = _bytes_to_base64_data(banner)
+            else:
+                payload['banner'] = None
 
         data: UserPayload = await self._state.http.edit_profile(payload)
         return ClientUser(state=self._state, data=data)
