@@ -82,6 +82,7 @@ if TYPE_CHECKING:
     import re
 
     from ..interactions import Interaction
+    from .._types import ClientT
     from ..message import Message
     from ..types.components import ComponentBase as ComponentBasePayload
     from ..types.interactions import (
@@ -206,6 +207,24 @@ class _ViewWeights:
         self.weights = [0, 0, 0, 0, 0]
 
 
+class _ViewCacheSnapshot:
+    __slots__ = ('items', 'dynamic_items')
+
+    def __init__(self) -> None:
+        self.items: Set[Tuple[int, str]] = set()
+        self.dynamic_items: Set[re.Pattern[str]] = set()
+
+    @classmethod
+    def diff(cls, older: _ViewCacheSnapshot, newer: _ViewCacheSnapshot) -> Self:
+        self = cls()
+        self.items = older.items - newer.items
+        self.dynamic_items = older.dynamic_items - newer.dynamic_items
+        return self
+
+    def __repr__(self) -> str:
+        return f'<_ViewCacheSnapshot items={self.items!r} dynamic_items={self.dynamic_items!r}>'
+
+
 class BaseView:
     __discord_ui_view__: ClassVar[bool] = False
     __discord_ui_modal__: ClassVar[bool] = False
@@ -219,6 +238,7 @@ class BaseView:
         self.__cancel_callback: Optional[Callable[[BaseView], None]] = None
         self.__timeout_expiry: Optional[float] = None
         self.__timeout_task: Optional[asyncio.Task[None]] = None
+        self.__snapshot: Optional[_ViewCacheSnapshot] = None
 
         try:
             loop = asyncio.get_running_loop()
@@ -324,6 +344,31 @@ class BaseView:
 
     def _add_count(self, value: int) -> None:
         self._total_children = max(0, self._total_children + value)
+
+    @property
+    def _snapshot(self) -> Optional[_ViewCacheSnapshot]:
+        return self.__snapshot
+
+    def _get_snapshot_diff(self) -> Optional[_ViewCacheSnapshot]:
+        if self.__snapshot is None:
+            self.__snapshot = self._get_snapshot()
+            return None
+
+        newer = self._get_snapshot()
+        diff = _ViewCacheSnapshot.diff(older=self.__snapshot, newer=newer)
+        # Update our snapshot to the newer version after diffing it
+        self.__snapshot = newer
+        return diff
+
+    def _get_snapshot(self) -> _ViewCacheSnapshot:
+        snapshot = _ViewCacheSnapshot()
+        for item in self.walk_children():
+            if isinstance(item, DynamicItem):
+                snapshot.dynamic_items.add(item.__discord_ui_compiled_template__)
+            elif item.is_dispatchable():
+                custom_id = item.custom_id  # type: ignore
+                snapshot.items.add((item.type.value, custom_id))
+        return snapshot
 
     @property
     def children(self) -> List[Item[Self]]:
@@ -485,7 +530,7 @@ class BaseView:
         """
         return _utils_get(self.walk_children(), id=id)
 
-    async def interaction_check(self, interaction: Interaction, /) -> bool:
+    async def interaction_check(self, interaction: Interaction[ClientT], /) -> bool:
         """|coro|
 
         A callback that is called when an interaction happens within the view
@@ -520,7 +565,7 @@ class BaseView:
         """
         pass
 
-    async def on_error(self, interaction: Interaction, error: Exception, item: Item[Any], /) -> None:
+    async def on_error(self, interaction: Interaction[ClientT], error: Exception, item: Item[Any], /) -> None:
         """|coro|
 
         A callback that is called when an item's callback or :meth:`interaction_check`
@@ -539,7 +584,7 @@ class BaseView:
         """
         _log.error('Ignoring exception in view %r for item %r', self, item, exc_info=error)
 
-    async def _scheduled_task(self, item: Item, interaction: Interaction):
+    async def _scheduled_task(self, item: Item[Any], interaction: Interaction[ClientT]):
         try:
             item._refresh_state(interaction, interaction.data)  # type: ignore
 
@@ -574,7 +619,7 @@ class BaseView:
         self.__stopped.set_result(True)
         asyncio.create_task(self.on_timeout(), name=f'discord-ui-view-timeout-{self.id}')
 
-    def _dispatch_item(self, item: Item, interaction: Interaction) -> Optional[asyncio.Task[None]]:
+    def _dispatch_item(self, item: Item[Any], interaction: Interaction[ClientT]) -> Optional[asyncio.Task[None]]:
         if self.__stopped is None or self.__stopped.done():
             return None
 
@@ -898,8 +943,9 @@ class ViewStore:
             self._modals[view.custom_id] = view  # type: ignore
             return
 
-        dispatch_info = self._views.setdefault(message_id, {})
+        dispatch_info = self._views.get(message_id, {})
         is_fully_dynamic = True
+        snapshot = view._get_snapshot_diff()
         for item in view.walk_children():
             if isinstance(item, DynamicItem):
                 pattern = item.__discord_ui_compiled_template__
@@ -908,26 +954,34 @@ class ViewStore:
                 dispatch_info[(item.type.value, item.custom_id)] = item  # type: ignore
                 is_fully_dynamic = False
 
+        if snapshot is not None:
+            for key in snapshot.items:
+                dispatch_info.pop(key, None)
+            for key in snapshot.dynamic_items:
+                self._dynamic_items.pop(key, None)
+
         view._cache_key = message_id
+        if dispatch_info:
+            self._views[message_id] = dispatch_info
+
         if message_id is not None and not is_fully_dynamic:
             self._synced_message_views[message_id] = view
 
-    def remove_view(self, view: View) -> None:
+    def remove_view(self, view: BaseView) -> None:
         if view.__discord_ui_modal__:
             self._modals.pop(view.custom_id, None)  # type: ignore
             return
 
         dispatch_info = self._views.get(view._cache_key)
-        if dispatch_info:
-            for item in view._children:
-                if isinstance(item, DynamicItem):
-                    pattern = item.__discord_ui_compiled_template__
-                    self._dynamic_items.pop(pattern, None)
-                elif item.is_dispatchable():
-                    dispatch_info.pop((item.type.value, item.custom_id), None)  # type: ignore
+        snapshot = view._snapshot
+        if dispatch_info and snapshot:
+            for key in snapshot.items:
+                dispatch_info.pop(key, None)
+            for key in snapshot.dynamic_items:
+                self._dynamic_items.pop(key, None)
 
-            if len(dispatch_info) == 0:
-                self._views.pop(view._cache_key, None)
+        if dispatch_info is not None and len(dispatch_info) == 0:
+            self._views.pop(view._cache_key, None)
 
         self._synced_message_views.pop(view._cache_key, None)  # type: ignore
 
@@ -935,7 +989,7 @@ class ViewStore:
         self,
         component_type: int,
         factory: Type[DynamicItem[Item[Any]]],
-        interaction: Interaction,
+        interaction: Interaction[ClientT],
         custom_id: str,
         match: re.Match[str],
     ) -> None:
@@ -986,7 +1040,7 @@ class ViewStore:
         except Exception:
             _log.exception('Ignoring exception in dynamic item callback for %r', item)
 
-    def dispatch_dynamic_items(self, component_type: int, custom_id: str, interaction: Interaction) -> None:
+    def dispatch_dynamic_items(self, component_type: int, custom_id: str, interaction: Interaction[ClientT]) -> None:
         for pattern, item in self._dynamic_items.items():
             match = pattern.fullmatch(custom_id)
             if match is not None:
@@ -997,17 +1051,14 @@ class ViewStore:
                     )
                 )
 
-    def dispatch_view(self, component_type: int, custom_id: str, interaction: Interaction) -> None:
+    def dispatch_view(self, component_type: int, custom_id: str, interaction: Interaction[ClientT]) -> None:
         self.dispatch_dynamic_items(component_type, custom_id, interaction)
-        interaction_id: Optional[int] = None
         message_id: Optional[int] = None
         # Realistically, in a component based interaction the Interaction.message will never be None
         # However, this guard is just in case Discord screws up somehow
         msg = interaction.message
         if msg is not None:
             message_id = msg.id
-            if msg.interaction_metadata:
-                interaction_id = msg.interaction_metadata.id
 
         key = (component_type, custom_id)
 
@@ -1015,21 +1066,6 @@ class ViewStore:
         item: Optional[Item[BaseView]] = None
         if message_id is not None:
             item = self._views.get(message_id, {}).get(key)
-
-        if item is None and interaction_id is not None:
-            try:
-                items = self._views.pop(interaction_id)
-            except KeyError:
-                item = None
-            else:
-                item = items.get(key)
-                # If we actually got the items, then these keys should probably be moved
-                # to the proper message_id instead of the interaction_id as they are now.
-                # An interaction_id is only used as a temporary stop gap for
-                # InteractionResponse.send_message so multiple view instances do not
-                # override each other.
-                # NOTE: Fix this mess if /callback endpoint ever gets proper return types
-                self._views.setdefault(message_id, {}).update(items)
 
         if item is None:
             # Fallback to None message_id searches in case a persistent view
@@ -1051,7 +1087,7 @@ class ViewStore:
     def dispatch_modal(
         self,
         custom_id: str,
-        interaction: Interaction,
+        interaction: Interaction[ClientT],
         components: List[ModalSubmitComponentInteractionDataPayload],
         resolved: ResolvedDataPayload,
     ) -> None:
@@ -1061,11 +1097,6 @@ class ViewStore:
             return
 
         self.add_task(modal._dispatch_submit(interaction, components, resolved))
-
-    def remove_interaction_mapping(self, interaction_id: int) -> None:
-        # This is called before re-adding the view
-        self._views.pop(interaction_id, None)
-        self._synced_message_views.pop(interaction_id, None)
 
     def is_message_tracked(self, message_id: int) -> bool:
         return message_id in self._synced_message_views
